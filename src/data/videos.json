@@ -1,0 +1,82 @@
+[
+  {
+    "id": "v-pre-surgery",
+    "title": "术前准备全流程",
+    "description": "详细介绍手术前需要做的各项准备工作，包括禁食、检查、个人卫生等",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "5:30",
+    "category": "pre-surgery",
+    "tags": ["术前", "手术", "准备", "禁食", "住院"]
+  },
+  {
+    "id": "v-post-surgery",
+    "title": "术后恢复护理指南",
+    "description": "讲解术后卧位、伤口护理、引流管管理、早期活动等注意事项",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "8:15",
+    "category": "post-surgery",
+    "tags": ["术后", "护理", "伤口", "恢复", "引流"]
+  },
+  {
+    "id": "v-hypertension",
+    "title": "高血压患者自我管理",
+    "description": "教您如何正确测量血压、合理用药、健康饮食和适量运动",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "6:45",
+    "category": "hypertension",
+    "tags": ["高血压", "血压", "降压药", "头晕", "心血管"]
+  },
+  {
+    "id": "v-diabetes",
+    "title": "糖尿病饮食与用药指导",
+    "description": "介绍血糖监测方法、胰岛素注射技巧、饮食控制和低血糖预防",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "7:20",
+    "category": "diabetes",
+    "tags": ["糖尿病", "血糖", "胰岛素", "降糖", "饮食"]
+  },
+  {
+    "id": "v-rehabilitation",
+    "title": "康复训练基础教程",
+    "description": "包含关节活动、肌力训练、平衡训练和步行训练的标准动作示范",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "10:00",
+    "category": "rehabilitation",
+    "tags": ["康复", "训练", "运动", "关节", "肌力", "跌倒"]
+  },
+  {
+    "id": "v-medication",
+    "title": "安全用药常识",
+    "description": "讲解正确服药方法、药物保存、不良反应识别和用药注意事项",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "4:50",
+    "category": "medication-safety",
+    "tags": ["用药", "药物", "服药", "不良反应", "副作用"]
+  },
+  {
+    "id": "v-discharge",
+    "title": "出院回家注意事项",
+    "description": "出院手续办理、带药管理、复诊安排和异常情况的识别与处理",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "5:10",
+    "category": "discharge",
+    "tags": ["出院", "复诊", "带药", "回家", "复查"]
+  },
+  {
+    "id": "v-emergency",
+    "title": "急诊就医指南",
+    "description": "告诉您哪些情况需要立即就医，急诊流程和就诊准备",
+    "url": "https://www.w3schools.com/html/mov_bbb.mp4",
+    "thumbnail": "",
+    "duration": "4:30",
+    "category": "emergency",
+    "tags": ["急诊", "急救", "胸痛", "呼吸困难", "出血", "发烧"]
+  }
+]
