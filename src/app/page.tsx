@@ -363,19 +363,12 @@ export default function Home() {
 
   // 开始录音
   const startRecording = useCallback(async () => {
-    console.log('[录音] startRecording 被调用');
-    console.log('[录音] navigator.mediaDevices:', !!navigator.mediaDevices);
-    console.log('[录音] getUserMedia:', !!navigator.mediaDevices?.getUserMedia);
-
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      console.error('[录音] 浏览器不支持 mediaDevices API');
       showToast("您的浏览器不支持录音功能", "error");
       return;
     }
     try {
-      console.log('[录音] 请求麦克风权限...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[录音] 麦克风权限获取成功');
       mediaStreamRef.current = stream;
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -401,9 +394,6 @@ export default function Home() {
       setProcessPhase("listening");
     } catch (error) {
       console.error("麦克风权限失败:", error);
-      if (error instanceof Error) {
-        console.error('[录音] 错误名称:', error.name, '消息:', error.message);
-      }
       showToast("无法访问麦克风，请检查浏览器权限设置", "error");
     }
   }, [showToast]);
@@ -422,16 +412,15 @@ export default function Home() {
     processRecording(chunks);
   }, [processRecording]);
 
-  // 点击录音：点一下开始，再点一下停止（兼容所有设备）
-  const handleMicClick = useCallback(() => {
-    console.log('[按钮] handleMicClick, isListening:', isListening, 'isLoading:', isLoading);
-    if (isLoading) return;
-    if (isListening) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
-  }, [isListening, isLoading, startRecording, stopRecording]);
+  const handlePressStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    if (!isListening && !isLoading) startRecording();
+  }, [isListening, isLoading, startRecording]);
+
+  const handlePressEnd = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    if (isListening) stopRecording();
+  }, [isListening, stopRecording]);
 
   return (
     <div className="h-screen bg-gradient-to-br from-slate-50 via-emerald-50 to-green-50 flex overflow-hidden">
@@ -529,7 +518,10 @@ export default function Home() {
           <div className="max-w-4xl w-full flex flex-col items-center">
             {/* ====== 录音按钮 ====== */}
             <button
-              onClick={handleMicClick}
+              onMouseDown={handlePressStart}
+              onMouseUp={handlePressEnd}
+              onTouchStart={handlePressStart}
+              onTouchEnd={handlePressEnd}
               disabled={isLoading}
               className={`relative w-36 h-36 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl select-none ${
                 processPhase === "listening"
@@ -556,9 +548,7 @@ export default function Home() {
               {/* idle */}
               {processPhase === "idle" && (
                 <div className="text-center animate-fade-in">
-                  <p className="text-sm text-gray-500">
-                    {isListening ? '点击按钮停止录音' : '点击按钮开始录音'}
-                  </p>
+                  <p className="text-sm text-gray-500">按住按钮说话，松手自动识别</p>
                 </div>
               )}
 
@@ -567,7 +557,7 @@ export default function Home() {
                 <div className="text-center animate-fade-in">
                   <div className="flex items-center justify-center gap-1.5 mb-2">
                     <span className="text-red-500">{Icons.mic("w-4 h-4")}</span>
-                    <p className="text-xs font-medium text-red-600">正在聆听，再次点击停止</p>
+                    <p className="text-xs font-medium text-red-600">正在聆听</p>
                   </div>
                   <div className="flex items-center justify-center gap-1">
                     {[0, 1, 2, 3, 4].map(i => (
