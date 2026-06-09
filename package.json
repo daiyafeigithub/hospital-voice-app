@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack --experimental-https --experimental-https-cert .cert/cert.pem --experimental-https-key .cert/key.pem",
-    "build": "next build",
-    "start": "next start",
+    "build": "next build --webpack",
+    "start": "next start --experimental-https --experimental-https-cert .cert/production/cert.pem --experimental-https-key .cert/production/key.pem",
     "lint": "eslint"
   },
   "dependencies": {
