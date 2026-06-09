@@ -67,7 +67,12 @@ const Icon = {
 
 // ====== Toast ======
 function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const t = setTimeout(() => onCloseRef.current(), 3000);
+    return () => clearTimeout(t);
+  }, [msg]); // 仅依赖 msg，避免 onClose 引用变化导致反复重建
   return (
     <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[60] animate-[slideDown_0.25s_ease-out]">
       <div className="bg-gray-900/90 backdrop-blur text-white text-sm px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2">
@@ -127,6 +132,9 @@ export default function Home() {
   const pcmChunksRef = useRef<Float32Array[]>([]);
   const isStoppedRef = useRef(false);
 
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+
   const showToast = useCallback((m: string) => setToast(m), []);
 
   // 处理录音 → 识别 → 自动播放
@@ -162,13 +170,15 @@ export default function Home() {
 
       setRecognizedText(sttData.text);
 
+      // 通过 ref 读取最新 conversations，避免循环依赖
+      const history = conversationsRef.current
+        .slice(-3)
+        .map(c => ({ role: "user" as const, content: c.question }));
+
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: sttData.text,
-          history: conversations.slice(-3).map(c => ({ role: "user", content: c.question })),
-        }),
+        body: JSON.stringify({ message: sttData.text, history }),
       });
       const chatData = await chatRes.json();
 
@@ -197,7 +207,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [conversations, showToast]);
+  }, [showToast]);
 
   // 开始录音
   const startRecording = useCallback(async () => {
@@ -241,12 +251,17 @@ export default function Home() {
     processRecording(chunks);
   }, [processRecording]);
 
-  // 点击麦克风
-  const handleMicClick = useCallback(() => {
-    if (isLoading) return;
+  // 长按开始录音
+  const handlePressStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    if (!isListening && !isLoading) startRecording();
+  }, [isListening, isLoading, startRecording]);
+
+  // 松手停止录音
+  const handlePressEnd = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
     if (isListening) stopRecording();
-    else startRecording();
-  }, [isListening, isLoading, startRecording, stopRecording]);
+  }, [isListening, stopRecording]);
 
   // 关闭视频
   const closeVideo = useCallback(() => {
@@ -269,8 +284,8 @@ export default function Home() {
 
   // 阶段文案
   const phaseText = {
-    idle: "点击开始说话",
-    listening: "正在聆听…再次点击停止",
+    idle: "长按识别",
+    listening: "正在聆听…松手停止",
     processing: recognizedText ? `"${recognizedText}"` : "识别中…",
     playing: "",
   }[phase];
@@ -349,9 +364,12 @@ export default function Home() {
 
         {/* 麦克风按钮 */}
         <button
-          onClick={handleMicClick}
+          onMouseDown={handlePressStart}
+          onMouseUp={handlePressEnd}
+          onTouchStart={handlePressStart}
+          onTouchEnd={handlePressEnd}
           disabled={isLoading && phase !== "listening"}
-          className={`relative w-28 h-28 rounded-full flex items-center justify-center transition-all duration-500 ease-out outline-none focus:outline-none ${
+          className={`relative w-28 h-28 rounded-full flex items-center justify-center transition-all duration-500 ease-out outline-none focus:outline-none select-none ${
             phase === "listening"
               ? "bg-red-500/20 ring-2 ring-red-400/50 scale-110"
               : phase === "processing"
