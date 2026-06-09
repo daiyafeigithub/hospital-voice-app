@@ -59,60 +59,85 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  try {
-    const messages = [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: `${contextText}\n\n患者问题：${message}` },
-    ];
+  const MODELS = [
+    "qwen3.6-max-preview",
+    "deepseek-v4-flash",
+    "kimi-k2.6",
+    "qwen3.6-flash-2026-04-16",
+  ];
 
-    if (history.length > 0) {
-      messages.splice(1, 0, ...history.slice(-6));
-    }
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: `${contextText}\n\n患者问题：${message}` },
+  ];
 
-    const response = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "qwen-plus",
-        messages,
-        temperature: 0.7,
-        max_tokens: 1000,
-      }),
-    });
+  if (history.length > 0) {
+    messages.splice(1, 0, ...history.slice(-6));
+  }
 
-    if (!response.ok) {
-      throw new Error(`DashScope API error: ${response.status}`);
-    }
+  let aiContent = "";
 
-    const data = await response.json();
-    let aiContent = data.choices?.[0]?.message?.content || "";
-
-    let parsed;
+  // 按顺序尝试模型，任一成功即停止
+  for (const model of MODELS) {
     try {
-      parsed = JSON.parse(aiContent);
-    } catch {
-      parsed = { answer: aiContent, videoIds: [] };
+      console.log(`DashScope 尝试模型: ${model}`);
+      const response = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.7,
+          max_tokens: 1000,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`DashScope [${model}] 失败 (${response.status}):`, errorBody);
+        continue;
+      }
+
+      const data = await response.json();
+      aiContent = data.choices?.[0]?.message?.content || "";
+      console.log(`DashScope [${model}] 成功:`, aiContent.slice(0, 50));
+      break;
+    } catch (e) {
+      console.warn(`DashScope [${model}] 异常:`, e);
     }
+  }
 
-    const finalVideoIds = [...new Set([...(parsed.videoIds || []), ...videoIds])];
-    const finalVideos = videos
-      .filter((v) => finalVideoIds.includes(v.id))
-      .slice(0, 3);
-
+  if (!aiContent) {
+    console.error("所有 DashScope 模型均调用失败，使用本地关键词匹配兜底");
     return NextResponse.json({
-      answer: parsed.answer,
-      videos: finalVideos,
-      videoIds: finalVideoIds,
+      answer: matchedDocs.length > 0
+        ? `根据关键词匹配到以下内容：\n${matchedDocs.map((d) => `- ${d.title}`).join("\n")}`
+        : "未找到相关内容，请咨询医护人员。",
+      videos: matchedVideos.map(({ score: _, ...v }) => v),
+      videoIds,
       sources: matchedDocs.map((d) => d.title),
     });
-  } catch (error) {
-    console.error("Chat API error:", error);
-    return NextResponse.json(
-      { error: "抱歉，系统暂时出现问题，请稍后再试或咨询医护人员。" },
-      { status: 500 }
-    );
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(aiContent);
+  } catch {
+    parsed = { answer: aiContent, videoIds: [] };
+  }
+
+  const finalVideoIds = [...new Set([...(parsed.videoIds || []), ...videoIds])];
+  const finalVideos = videos
+    .filter((v) => finalVideoIds.includes(v.id))
+    .slice(0, 3);
+
+  return NextResponse.json({
+    answer: parsed.answer,
+    videos: finalVideos,
+    videoIds: finalVideoIds,
+    sources: matchedDocs.map((d) => d.title),
+  });
 }
