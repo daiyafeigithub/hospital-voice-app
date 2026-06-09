@@ -39,6 +39,17 @@ function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
 
 // ====== 类型 ======
 interface Video { id: string; title: string; description: string; url: string; duration: string; category: string; tags: string[] }
+
+const CATEGORY_LABELS: Record<string, string> = {
+  'pre-surgery': '术前准备',
+  'post-surgery': '术后护理',
+  'hypertension': '心血管内科',
+  'diabetes': '内分泌科',
+  'rehabilitation': '康复科',
+  'medication-safety': '药剂科',
+  'discharge': '出院指导',
+  'emergency': '急诊科',
+};
 interface Conversation { id: string; question: string; answer: string; videos?: Video[]; sources?: string[]; timestamp: number }
 type Phase = "idle" | "listening" | "processing" | "playing";
 
@@ -69,13 +80,14 @@ function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
 
 // ====== 全屏视频播放器 ======
 function VideoOverlay({ video, onClose }: { video: Video; onClose: () => void }) {
+  const categoryLabel = CATEGORY_LABELS[video.category] || video.category;
   return (
     <div className="fixed inset-0 z-50 bg-black animate-[fadeIn_0.2s_ease-out] flex flex-col">
       {/* 顶栏 */}
       <div className="absolute top-0 left-0 right-0 z-10 bg-gradient-to-b from-black/70 to-transparent px-4 pt-4 pb-10 flex items-center justify-between">
         <div className="flex items-center gap-2 min-w-0 flex-1 mr-4">
-          {Icon.video("w-4 h-4 text-white/70")}
-          <span className="text-white text-sm font-medium truncate">{video.title}</span>
+          <span className="text-[11px] text-white/50 flex-shrink-0">当前播放：</span>
+          <span className="text-white text-sm font-medium truncate">{categoryLabel}</span>
         </div>
         <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors flex-shrink-0">
           {Icon.x("w-5 h-5 text-white")}
