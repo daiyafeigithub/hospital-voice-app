@@ -584,6 +584,8 @@ export default function HomePage() {
   };
 
   const fetchSignals = async (_role: "caller" | "callee"): Promise<{ type: string; data: any }[]> => {
+    // 挂断后 callId 已被清空，停止无意义的请求
+    if (!callIdRef.current) return [];
     try {
       const res = await fetch(`/api/signal?callId=${callIdRef.current}&role=${_role}`);
       if (!res.ok) return [];
@@ -604,7 +606,10 @@ export default function HomePage() {
   // 主叫页手动接听来电（由用户点击触发 → 有用户手势 → 权限通过）
   const handleAnswerIncoming = useCallback(() => {
     if (!inboundCallIdRef.current) return;
-    answerIncomingCall(inboundCallIdRef.current);
+    // 点击接听后清除来电标记，防止重复触发
+    const cid = inboundCallIdRef.current;
+    inboundCallIdRef.current = "";
+    answerIncomingCall(cid);
   }, []);
 
   const hangup = useCallback(() => {
@@ -631,15 +636,19 @@ export default function HomePage() {
       console.error("hangup cleanup error:", e);
     }
     
+    // 通知对方挂断（通话对方）
+    const endedCallId = callIdRef.current;
     // 异步通知对方
-    if (callIdRef.current) {
+    if (endedCallId) {
       sendSignal("call-ended", null).catch(() => {});
       fetch("/api/call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "end", callId: callIdRef.current }),
+        body: JSON.stringify({ action: "end", callId: endedCallId }),
       }).catch(() => {});
     }
+    // 挂断后清空 callId，防止后续误用
+    callIdRef.current = "";
     
     isHangingUpRef.current = false;
   }, []);
