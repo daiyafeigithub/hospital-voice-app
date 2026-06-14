@@ -1,0 +1,44 @@
+{
+  "hospitals": [
+    {
+      "id": "hosp-main",
+      "name": "市第一人民医院",
+      "shortName": "总院",
+      "departments": [
+        { "id": "dept-cardio", "name": "心血管内科" },
+        { "id": "dept-neuro", "name": "神经内科" },
+        { "id": "dept-er", "name": "急诊科" },
+        { "id": "dept-nursing", "name": "护理部" },
+        { "id": "dept-pharmacy", "name": "药剂科" },
+        { "id": "dept-rehab", "name": "康复科" },
+        { "id": "dept-respiratory", "name": "呼吸内科" },
+        { "id": "dept-surgery", "name": "外科" }
+      ]
+    },
+    {
+      "id": "hosp-east",
+      "name": "市人民医院东院区",
+      "shortName": "东院",
+      "departments": [
+        { "id": "dept-east-cardio", "name": "心血管内科" },
+        { "id": "dept-east-surgery", "name": "外科" },
+        { "id": "dept-east-pediatrics", "name": "儿科" },
+        { "id": "dept-east-neuro", "name": "神经内科" }
+      ]
+    }
+  ],
+  "staff": [
+    { "id": "doc-zhang", "name": "张医生", "title": "主治医师", "avatar": "张", "department": "心血管内科", "hospitalId": "hosp-main", "deptId": "dept-cardio", "keywords": ["张医生", "张大夫", "心血管", "心脏", "张"] },
+    { "id": "doc-li", "name": "李医生", "title": "副主任医师", "avatar": "李", "department": "神经内科", "hospitalId": "hosp-main", "deptId": "dept-neuro", "keywords": ["李医生", "李大夫", "神经", "李"] },
+    { "id": "nurse-wang", "name": "王护士", "title": "主管护师", "avatar": "王", "department": "护理部", "hospitalId": "hosp-main", "deptId": "dept-nursing", "keywords": ["王护士", "护士", "护理", "王"] },
+    { "id": "doc-zhao", "name": "赵主任", "title": "急诊科主任", "avatar": "赵", "department": "急诊科", "hospitalId": "hosp-main", "deptId": "dept-er", "keywords": ["赵主任", "赵医生", "急诊", "赵"] },
+    { "id": "pharmacy", "name": "药房值班", "title": "药剂师", "avatar": "药", "department": "药剂科", "hospitalId": "hosp-main", "deptId": "dept-pharmacy", "keywords": ["药房", "药剂", "拿药", "用药"] },
+    { "id": "rehab", "name": "康复师小陈", "title": "康复治疗师", "avatar": "陈", "department": "康复科", "hospitalId": "hosp-main", "deptId": "dept-rehab", "keywords": ["康复", "小陈", "康复师", "陈"] },
+    { "id": "doc-liu", "name": "刘医生", "title": "主任医师", "avatar": "刘", "department": "呼吸内科", "hospitalId": "hosp-main", "deptId": "dept-respiratory", "keywords": ["刘医生", "刘大夫", "呼吸", "刘"] },
+    { "id": "doc-sun", "name": "孙医生", "title": "外科主治医师", "avatar": "孙", "department": "外科", "hospitalId": "hosp-main", "deptId": "dept-surgery", "keywords": ["孙医生", "孙大夫", "外科", "孙"] },
+    { "id": "doc-zhou-east", "name": "周医生", "title": "心血管主任", "avatar": "周", "department": "心血管内科", "hospitalId": "hosp-east", "deptId": "dept-east-cardio", "keywords": ["周医生", "周大夫", "东院心血管", "周"] },
+    { "id": "doc-wu-east", "name": "吴医生", "title": "外科医师", "avatar": "吴", "department": "外科", "hospitalId": "hosp-east", "deptId": "dept-east-surgery", "keywords": ["吴医生", "吴大夫", "东院外科", "吴"] },
+    { "id": "doc-chen-east", "name": "陈医生", "title": "儿科主任", "avatar": "陈", "department": "儿科", "hospitalId": "hosp-east", "deptId": "dept-east-pediatrics", "keywords": ["陈医生", "陈大夫", "东院儿科", "陈"] },
+    { "id": "doc-qin-east", "name": "秦医生", "title": "神经内科医师", "avatar": "秦", "department": "神经内科", "hospitalId": "hosp-east", "deptId": "dept-east-neuro", "keywords": ["秦医生", "秦大夫", "东院神经", "秦"] }
+  ]
+}

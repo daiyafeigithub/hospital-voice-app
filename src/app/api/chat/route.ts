@@ -1,143 +1,183 @@
+// ============================================
+// AI 对话 API — 医生呼叫医生
+// ============================================
+
 import { NextRequest, NextResponse } from "next/server";
-import knowledgeBase from "@/data/knowledge-base.json";
-import videos from "@/data/videos.json";
-import { keywordMatch } from "@/lib/similarity";
+import users from "@/data/users.json";
 
-const SYSTEM_PROMPT = `你是一个医院智能助手，专门为住院患者和家属提供医疗知识解答和视频推荐。
-你的回答要：
-1. 通俗易懂，避免过于专业的术语
-2. 语气温和友善，适合老年患者阅读
-3. 基于提供的知识库内容回答，如果知识库没有相关信息，请诚实告知
-4. 每次回答末尾，如果有关联视频，请推荐用户观看
+const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || "";
 
-请用以下JSON格式回复：
-{"answer": "你的文字回答", "videoIds": ["推荐视频id数组，没有则为空数组"]}`;
+interface Contact {
+  id: string;
+  name: string;
+  title: string;
+  avatar: string;
+  department: string;
+  hospitalName: string;
+  hospitalShortName: string;
+  hospitalId: string;
+  deptId: string;
+  keywords: string[];
+}
 
-export async function POST(req: NextRequest) {
-  const { message, history = [] } = await req.json();
+// 从 users.json 构建联系人列表（含医院信息）
+const CONTACTS: Contact[] = users.staff.map((s) => {
+  const hospital = users.hospitals.find((h) => h.id === s.hospitalId);
+  return {
+    id: s.id,
+    name: s.name,
+    title: s.title,
+    avatar: s.avatar,
+    department: s.department,
+    hospitalName: hospital?.name || "",
+    hospitalShortName: hospital?.shortName || "",
+    hospitalId: s.hospitalId,
+    deptId: s.deptId,
+    keywords: [s.name, s.name.slice(0, 2), s.department],
+  };
+});
 
-  if (!message) {
-    return NextResponse.json({ error: "请输入您的问题" }, { status: 400 });
-  }
+const contactsSummary = CONTACTS
+  .map((c) => `- ${c.name} (${c.hospitalShortName} ${c.department}, ${c.title}), id: ${c.id}`)
+  .join("\n");
 
-  const matchedDocs = knowledgeBase
-    .map((doc) => ({
-      ...doc,
-      score: keywordMatch(message, doc.content, doc.tags),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3)
-    .filter((d) => d.score > 0);
+const SYSTEM_PROMPT =
+  "你是一个医院医护呼叫助手，名字叫小H。核心任务：帮医生联系其他科室的医生。\n\n" +
+  "可用联系人：\n" +
+  contactsSummary +
+  "\n\n" +
+  "规则：\n" +
+  "1. 用户打招呼(你好/在吗/呼叫) → 用对方称呼回应，然后询问要联系哪位医生\n" +
+  "2. 用户说出联系人名字 → 返回 { \"action\":\"call\", \"answer\":\"好的，正在为您呼叫...\", \"contactId\":\"联系人id\" }\n" +
+  "3. 用户说不相关的 → 引导说出要呼叫谁\n" +
+  "4. 用户说取消/不用 → 友好结束\n\n" +
+  "必须返回纯JSON。action: reply或call。call时contactId必须是列表中存在的id。answer不超过50字。";
 
-  const matchedVideos = videos
-    .map((v) => ({
-      ...v,
-      score: keywordMatch(message, v.title + v.description, v.tags),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 2)
-    .filter((v) => v.score > 0);
-
-  const contextText = matchedDocs.length > 0
-    ? `以下是相关的医疗知识文档，请基于这些内容回答患者问题：\n\n${matchedDocs.map((d) => `【${d.title}】\n${d.content}`).join("\n\n")}`
-    : "知识库中没有找到完全匹配的内容，请根据你的医疗常识给出一般性建议，并提醒患者咨询主治医生。";
-
-  const videoIds = matchedVideos.map((v) => v.id);
-
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-
-  if (!apiKey || apiKey === "your_dashscope_api_key_here") {
-    const fallbackAnswer = matchedDocs.length > 0
-      ? `根据您的提问，我找到了以下相关信息：\n\n${matchedDocs.map((d) => `**${d.title}**\n${d.content}`).join("\n\n")}${matchedVideos.length > 0 ? "\n\n📺 为您推荐以下视频：" : ""}`
-      : `感谢您的提问！请在 .env.local 文件中配置您的 DASHSCOPE_API_KEY 以启用通义千问大模型。\n\n目前我可以根据关键词为您找到相关资料：\n${matchedDocs.length > 0 ? matchedDocs.map((d) => `- ${d.title}`).join("\n") : "- 暂未找到相关内容"}`;
-
-    return NextResponse.json({
-      answer: fallbackAnswer,
-      videos: matchedVideos.map(({ score: _, ...v }) => v),
-      videoIds,
-      sources: matchedDocs.map((d) => d.title),
-    });
-  }
-
-  const MODELS = [
-    "qwen3.6-max-preview",
-    "deepseek-v4-flash",
-    "kimi-k2.6",
-    "qwen3.6-flash-2026-04-16",
-  ];
-
-  const messages = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: `${contextText}\n\n患者问题：${message}` },
-  ];
-
-  if (history.length > 0) {
-    messages.splice(1, 0, ...history.slice(-6));
-  }
-
-  let aiContent = "";
-
-  // 按顺序尝试模型，任一成功即停止
-  for (const model of MODELS) {
-    try {
-      console.log(`DashScope 尝试模型: ${model}`);
-      const response = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: 0.7,
-          max_tokens: 1000,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error(`DashScope [${model}] 失败 (${response.status}):`, errorBody);
-        continue;
+// 本地关键词匹配
+function localMatchContact(text: string): Contact | null {
+  let best: Contact | null = null;
+  let bestScore = 0;
+  for (const c of CONTACTS) {
+    for (const kw of c.keywords) {
+      if (text.includes(kw) && kw.length > bestScore) {
+        bestScore = kw.length;
+        best = c;
       }
-
-      const data = await response.json();
-      aiContent = data.choices?.[0]?.message?.content || "";
-      console.log(`DashScope [${model}] 成功:`, aiContent.slice(0, 50));
-      break;
-    } catch (e) {
-      console.warn(`DashScope [${model}] 异常:`, e);
     }
   }
+  return bestScore > 0 ? best : null;
+}
 
-  if (!aiContent) {
-    console.error("所有 DashScope 模型均调用失败，使用本地关键词匹配兜底");
-    return NextResponse.json({
-      answer: matchedDocs.length > 0
-        ? `根据关键词匹配到以下内容：\n${matchedDocs.map((d) => `- ${d.title}`).join("\n")}`
-        : "未找到相关内容，请咨询医护人员。",
-      videos: matchedVideos.map(({ score: _, ...v }) => v),
-      videoIds,
-      sources: matchedDocs.map((d) => d.title),
-    });
+function localClassifyIntent(text: string): { action: string; answer: string; contactId?: string } {
+  const cancel = ["不用", "取消", "算了", "没事", "不要", "不需要"];
+  const greet = ["你好", "在吗", "呼叫", "小h", "小H", "help", "帮助", "请问", "hi", "hello"];
+
+  if (cancel.some((w) => text.includes(w))) {
+    return { action: "reply", answer: "好的，有需要随时叫我。" };
   }
 
-  let parsed;
+  const matched = localMatchContact(text);
+  if (matched) {
+    return { action: "call", answer: `好的，正在为您呼叫${matched.name}（${matched.hospitalShortName} ${matched.department}）...`, contactId: matched.id };
+  }
+
+  if (greet.some((w) => text.includes(w))) {
+    return { action: "reply", answer: `您好！我是小H。请问需要呼叫哪位医生？可联系：${CONTACTS.map((c) => c.name).join("、")}` };
+  }
+
+  return { action: "reply", answer: "请问您需要联系哪位医生？说出医生姓名即可快速呼叫。" };
+}
+
+const MODELS = ["qwen3.6-max-preview", "deepseek-v4-flash", "kimi-k2.6", "qwen3.6-flash-2026-04-16"];
+
+export async function POST(request: NextRequest) {
   try {
-    parsed = JSON.parse(aiContent);
-  } catch {
-    parsed = { answer: aiContent, videoIds: [] };
+    const body = await request.json();
+    const message: string = (body.message || "").trim();
+    const history: { role: string; content: string }[] = body.history || [];
+    const callerName: string = body.callerName || "";
+    const callerDepartment: string = body.callerDepartment || "";
+
+    if (!message) {
+      return NextResponse.json({ action: "reply", answer: "请说一句话，我来帮您。", contact: null });
+    }
+
+    const apiKey = DASHSCOPE_API_KEY;
+
+    if (!apiKey) {
+      console.log("无 DASHSCOPE_API_KEY，使用本地意图匹配");
+      const result = localClassifyIntent(message);
+      const contact = result.contactId ? CONTACTS.find((c) => c.id === result.contactId) || null : null;
+      return NextResponse.json({ ...result, contact });
+    }
+
+    // 在 system prompt 中注入呼叫方身份信息
+    const identityHint = callerName
+      ? `当前呼叫方身份：${callerName}医生${callerDepartment ? `，${callerDepartment}` : ""}。请用医生称呼。`
+      : "";
+
+    const messages = [
+      { role: "system", content: identityHint ? `${SYSTEM_PROMPT}\n\n${identityHint}` : SYSTEM_PROMPT },
+      ...history.slice(-6),
+      { role: "user", content: message },
+    ];
+
+    let aiContent = "";
+
+    for (const model of MODELS) {
+      try {
+        const response = await fetch(
+          "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer " + apiKey,
+            },
+            body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 500 }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          console.error(`DashScope [${model}] 失败 (${response.status}):`, errorBody);
+          continue;
+        }
+
+        const data = await response.json();
+        aiContent = data.choices?.[0]?.message?.content || "";
+        break;
+      } catch (e) {
+        console.warn(`DashScope [${model}] 异常:`, e);
+      }
+    }
+
+    if (!aiContent) {
+      console.error("所有 AI 模型调用失败，降级到本地匹配");
+      const result = localClassifyIntent(message);
+      const contact = result.contactId ? CONTACTS.find((c) => c.id === result.contactId) || null : null;
+      return NextResponse.json({ ...result, contact });
+    }
+
+    let parsed: { action: string; answer: string; contactId?: string };
+    try {
+      const cleaned = aiContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      const result = localClassifyIntent(message);
+      const contact = result.contactId ? CONTACTS.find((c) => c.id === result.contactId) || null : null;
+      return NextResponse.json({ ...result, contact });
+    }
+
+    const contact = parsed.contactId ? CONTACTS.find((c) => c.id === parsed.contactId) || null : null;
+
+    return NextResponse.json({
+      action: parsed.action === "call" && contact ? "call" : "reply",
+      answer: parsed.answer || "请问需要联系哪位医生？",
+      contact,
+    });
+  } catch (error) {
+    console.error("Chat API error:", error);
+    return NextResponse.json({ action: "reply", answer: "抱歉，系统暂时出现问题，请稍后再试。", contact: null });
   }
-
-  const finalVideoIds = [...new Set([...(parsed.videoIds || []), ...videoIds])];
-  const finalVideos = videos
-    .filter((v) => finalVideoIds.includes(v.id))
-    .slice(0, 3);
-
-  return NextResponse.json({
-    answer: parsed.answer,
-    videos: finalVideos,
-    videoIds: finalVideoIds,
-    sources: matchedDocs.map((d) => d.title),
-  });
 }

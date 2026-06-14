@@ -36,9 +36,9 @@ export async function POST(request: NextRequest) {
   try {
     // 检查配置
     if (!APP_ID || !API_KEY || !SECRET_KEY) {
-      console.error("百度语音配置缺失");
+      console.error("百度语音配置缺失 - APP_ID:", !!APP_ID, "API_KEY:", !!API_KEY, "SECRET_KEY:", !!SECRET_KEY);
       return NextResponse.json(
-        { error: "语音识别配置错误，请检查环境变量" },
+        { success: false, error: "语音识别配置错误，请检查环境变量" },
         { status: 500 }
       );
     }
@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
     const token = await getAccessToken();
 
     // 调用百度语音识别 REST API
+    // dev_pid: 1536 = 普通话(标准模型, 免费可用); 1537 = 高精度模型(付费)
     const asrUrl = "https://vop.baidu.com/server_api";
     const asrBody = JSON.stringify({
       format: "wav",
@@ -70,6 +71,7 @@ export async function POST(request: NextRequest) {
       token: token,
       speech: base64Audio,
       len: arrayBuffer.byteLength,
+      dev_pid: 1536, // 普通话标准识别模型
     });
 
     console.log(`发送语音识别请求，音频大小: ${arrayBuffer.byteLength} bytes`);
@@ -100,12 +102,45 @@ export async function POST(request: NextRequest) {
     }
 
     // 提取识别文字
-    const text = result.result?.[0] || "";
+    let text = result.result?.[0] || "";
+
+    // 如果标准模型返回空，用高精度模型重试一次
+    if (!text) {
+      console.warn("标准模型返回空文本，尝试高精度模型...");
+      const asrBodyHq = JSON.stringify({
+        format: "wav",
+        rate: 16000,
+        channel: 1,
+        cuid: "hospital_voice_app",
+        token: token,
+        speech: base64Audio,
+        len: arrayBuffer.byteLength,
+        dev_pid: 1537, // 高精度模型
+      });
+
+      const retryResponse = await fetch(asrUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: asrBodyHq,
+      });
+
+      if (retryResponse.ok) {
+        const retryResult = await retryResponse.json();
+        if (retryResult.err_no === 0 && retryResult.result?.[0]) {
+          text = retryResult.result[0];
+          console.log(`高精度模型重试成功: "${text}"`);
+        } else {
+          console.error("高精度模型也返回空, result:", JSON.stringify(retryResult));
+        }
+      } else {
+        console.error(`高精度模型重试 HTTP ${retryResponse.status}`);
+      }
+    }
 
     if (!text) {
-      console.error("百度语音识别返回空文本, result:", JSON.stringify(result));
+      console.error("语音识别最终返回空文本, 原始result:", JSON.stringify(result));
       return NextResponse.json(
-        { error: "未识别到语音内容，请清晰说话后再试" },
+        { success: false, error: "未识别到语音内容，请大声清晰说话后再试" },
         { status: 400 }
       );
     }
@@ -117,9 +152,9 @@ export async function POST(request: NextRequest) {
       success: true,
     });
   } catch (error) {
-    console.error("语音识别异常:", error);
+    console.error("语音识别异常:", error instanceof Error ? error.message : error, error instanceof Error ? error.stack : "");
     return NextResponse.json(
-      { error: "语音识别服务异常: " + (error instanceof Error ? error.message : String(error)) },
+      { success: false, error: "语音识别服务异常: " + (error instanceof Error ? error.message : String(error)) },
       { status: 500 }
     );
   }

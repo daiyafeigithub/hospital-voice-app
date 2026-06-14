@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack --experimental-https --experimental-https-cert .cert/cert.pem --experimental-https-key .cert/key.pem",
+    "dev": "next dev --webpack",
+    "dev:https": "node server.js",
     "build": "next build --webpack",
-    "start": "next start --experimental-https --experimental-https-cert .cert/production/cert.pem --experimental-https-key .cert/production/key.pem",
+    "start": "NODE_ENV=production node server.js",
     "lint": "eslint"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
+    "selfsigned": "^5.5.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

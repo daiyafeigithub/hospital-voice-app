@@ -1,0 +1,50 @@
+[
+  {
+    "id": "doc-zhang",
+    "name": "张医生",
+    "title": "心血管内科主治医师",
+    "avatar": "ZHANG",
+    "department": "心血管内科",
+    "keywords": ["张医生", "张大夫", "心血管", "心脏", "张"]
+  },
+  {
+    "id": "doc-li",
+    "name": "李医生",
+    "title": "神经内科副主任医师",
+    "avatar": "LI",
+    "department": "神经内科",
+    "keywords": ["李医生", "李大夫", "神经", "李"]
+  },
+  {
+    "id": "nurse-wang",
+    "name": "王护士",
+    "title": "护理部主管护师",
+    "avatar": "WANG",
+    "department": "护理部",
+    "keywords": ["王护士", "护士", "护理", "王"]
+  },
+  {
+    "id": "doc-zhao",
+    "name": "赵主任",
+    "title": "急诊科主任",
+    "avatar": "ZHAO",
+    "department": "急诊科",
+    "keywords": ["赵主任", "急诊", "赵"]
+  },
+  {
+    "id": "pharmacy",
+    "name": "药房值班",
+    "title": "药剂科",
+    "avatar": "RX",
+    "department": "药剂科",
+    "keywords": ["药房", "药剂", "拿药", "用药"]
+  },
+  {
+    "id": "rehab",
+    "name": "康复师小陈",
+    "title": "康复治疗师",
+    "avatar": "CHEN",
+    "department": "康复科",
+    "keywords": ["康复", "小陈", "康复师", "陈"]
+  }
+]
