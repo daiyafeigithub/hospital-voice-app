@@ -1,0 +1,47 @@
+﻿[2026-06-16 20:43:07] [INFO] ========== DEPLOY START ==========
+[2026-06-16 20:43:07] [INFO] ScriptDir: D:\code\hospital-voice-app\
+[2026-06-16 20:43:07] [INFO] ProjectDir: C:\Users\Administrator\hospital-voice-app
+[2026-06-16 20:43:07] [INFO] Repo: https://gitee.com/daiyafeigitee/hospital-voice-app.git
+[2026-06-16 20:43:07] [INFO] node check: v24.15.0
+[2026-06-16 20:43:07] [OK] Node.js v24.15.0 OK
+[2026-06-16 20:43:07] [INFO] git check: git version 2.54.0.windows.1
+[2026-06-16 20:43:07] [OK] Git git version 2.54.0.windows.1 OK
+[2026-06-16 20:43:07] [INFO] Dir exists, pulling...
+[2026-06-16 20:43:07] [INFO] git stash: No local changes to save
+[2026-06-16 20:43:07] [INFO] git checkout: Already on 'main' Your branch is up to date with 'origin/main'.
+[2026-06-16 20:43:08] [INFO] git pull: From https://gitee.com/daiyafeigitee/hospital-voice-app  * branch            main       -> FETCH_HEAD Already up to date.
+[2026-06-16 20:43:08] [OK] Code updated OK
+[2026-06-16 20:44:11] [INFO] npm install output (last 10 lines):
+[2026-06-16 20:44:11] [INFO] 12 vulnerabilities (5 moderate, 2 high, 5 critical)
+[2026-06-16 20:44:11] [INFO] 
+[2026-06-16 20:44:11] [INFO] To address all issues possible (including breaking changes), run:
+[2026-06-16 20:44:11] [INFO]   npm audit fix --force
+[2026-06-16 20:44:11] [INFO] 
+[2026-06-16 20:44:11] [INFO] Some issues need review, and may require choosing
+[2026-06-16 20:44:11] [INFO] a different dependency.
+[2026-06-16 20:44:11] [INFO] 
+[2026-06-16 20:44:11] [INFO] Run `npm audit` for details.
+[2026-06-16 20:44:11] [INFO] 
+[2026-06-16 20:44:11] [OK] npm install OK
+[2026-06-16 20:44:29] [INFO] build output (last 10 lines):
+[2026-06-16 20:44:29] [INFO] ├ ƒ /api/signal/sse
+[2026-06-16 20:44:29] [INFO] ├ ƒ /api/speech-to-text
+[2026-06-16 20:44:29] [INFO] ├ ○ /login
+[2026-06-16 20:44:29] [INFO] └ ○ /receiver
+[2026-06-16 20:44:29] [INFO] 
+[2026-06-16 20:44:29] [INFO] 
+[2026-06-16 20:44:29] [INFO] ○  (Static)   prerendered as static content
+[2026-06-16 20:44:29] [INFO] ƒ  (Dynamic)  server-rendered on demand
+[2026-06-16 20:44:29] [INFO] 
+[2026-06-16 20:44:29] [INFO] 
+[2026-06-16 20:44:29] [OK] Build OK
+[2026-06-16 20:44:29] [INFO] Port check: 
+[2026-06-16 20:44:29] [INFO] Starting next start -p 3000 ...
+[2026-06-16 20:44:29] [INFO] Server PID: 20284
+[2026-06-16 20:44:35] [OK] Server responded HTTP 200 OK
+[2026-06-16 20:44:35] [INFO] ngrok check: ngrok version 3.39.1-msix-stable
+[2026-06-16 20:44:35] [INFO] ngrok PID: 7124
+[2026-06-16 20:44:41] [OK] Public URL: https://331a-120-244-61-184.ngrok-free.app
+[2026-06-16 20:44:41] [INFO] ========== DEPLOY COMPLETE ==========
+[2026-06-16 20:45:22] [INFO] Cleaning up...
+[2026-06-16 20:45:22] [INFO] Stopped.

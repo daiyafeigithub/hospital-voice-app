@@ -1,19 +1,20 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect } from "react";
 
 // ============================================
 // 类型定义
 // ============================================
-interface UserIdentity {
-  userId: string;
+interface Hospital {
+  id: string;
   name: string;
-  department?: string;
-  avatar?: string;
-  hospitalName?: string;
-  hospitalId?: string;
-  deptId?: string;
+  shortName: string;
+  departments: Department[];
+}
+
+interface Department {
+  id: string;
+  name: string;
 }
 
 interface StaffContact {
@@ -28,1103 +29,679 @@ interface StaffContact {
   deptId: string;
 }
 
-interface DepartmentGroup {
-  deptName: string;
-  hospitalName: string;
-  hospitalShortName: string;
-  contacts: StaffContact[];
-}
-
 type Phase =
-  | "idle" | "listening" | "processing" | "reply"
-  | "calling" | "ringing" | "incall" | "ended";
-
-interface Conversation {
-  id: string;
-  question: string;
-  answer: string;
-  contact?: StaffContact | null;
-}
-
-// ============================================
-// WebRTC 工具
-// ============================================
-const ICE_SERVERS = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-function createPeerConnection() { return new RTCPeerConnection(ICE_SERVERS); }
-
-const SIGNAL_POLL_INTERVAL = 500;
+  | "idle"
+  | "select-hospital"
+  | "select-department"
+  | "select-doctor"
+  | "consulting";
 
 // ============================================
 // 主组件
 // ============================================
 export default function HomePage() {
-  const router = useRouter();
-
-  const [user, setUser] = useState<UserIdentity | null>(null);
-  const [contactGroups, setContactGroups] = useState<DepartmentGroup[]>([]);
-  const [showContacts, setShowContacts] = useState(false);
-  const [authChecked, setAuthChecked] = useState(false);
-
+  // 远程会诊流程状态
   const [phase, setPhase] = useState<Phase>("idle");
-  const [convos, setConvos] = useState<Conversation[]>([]);
-  const [recognizedText, setRecognizedText] = useState("");
-  const [aiAnswer, setAiAnswer] = useState("");
-  const [targetContact, setTargetContact] = useState<StaffContact | null>(null);
-  const [callDuration, setCallDuration] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  const [isVideoCall, setIsVideoCall] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [allStaff, setAllStaff] = useState<StaffContact[]>([]);
+  const [selectedHospital, setSelectedHospital] = useState<Hospital | null>(null);
+  const [selectedDept, setSelectedDept] = useState<Department | null>(null);
+  const [selectedDoctor, setSelectedDoctor] = useState<StaffContact | null>(null);
+  const [deptDoctors, setDeptDoctors] = useState<StaffContact[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [responseShown, setResponseShown] = useState(false);
+  const [responseType, setResponseType] = useState<"audio" | "video" | "text">("text");
 
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const pcmChunksRef = useRef<Float32Array[]>([]);
-  const isStoppedRef = useRef(false);
+  // 媒体 ref
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const callIdRef = useRef<string>("");
-  const signalTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const callRoleRef = useRef<"caller" | "callee">("caller");
-  const inboundCallIdRef = useRef<string>(""); // 来电 callId，等待用户点击接听
-  const isHangingUpRef = useRef(false); // 防重入
-  const ringBgmRef = useRef<HTMLAudioElement | null>(null); // 呼叫等待 BGM
+  // 检测本地媒体文件是否存在（优先 public，否则在线兜底）
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [mediaChecked, setMediaChecked] = useState(false);
 
-  // 初始化：加载当前医生 & 全院通讯录
+  const FALLBACK_VIDEO = "https://www.w3schools.com/html/mov_bbb.mp4";
+
   useEffect(() => {
-    const stored = localStorage.getItem("auth_user");
-    if (stored) {
+    const checkLocal = async (path: string) => {
       try {
-        const u = JSON.parse(stored) as UserIdentity;
-        setUser(u);
-        // 加载所有医护人员（含医院信息）
-        fetch("/api/auth?list=all-staff-full")
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.staff) {
-              const staff: StaffContact[] = d.staff;
-              // 排除自己
-              const others = staff.filter((s) => s.id !== u.userId);
-              // 按医院+科室分组
-              const groups = new Map<string, DepartmentGroup>();
-              for (const s of others) {
-                const key = `${s.hospitalId}__${s.department}`;
-                if (!groups.has(key)) {
-                  groups.set(key, {
-                    deptName: s.department,
-                    hospitalName: s.hospitalName,
-                    hospitalShortName: s.hospitalShortName,
-                    contacts: [],
-                  });
-                }
-                groups.get(key)!.contacts.push(s);
-              }
-              setContactGroups(Array.from(groups.values()));
-            }
-          })
-          .catch(() => {});
-      } catch {}
-    }
-    setAuthChecked(true);
+        const r = await fetch(path, { method: "HEAD" });
+        return r.ok ? path : null;
+      } catch {
+        return null;
+      }
+    };
+
+    Promise.all([
+      checkLocal("/emergency-response.mp3"),
+      checkLocal("/respiratory-response.mp4"),
+    ]).then(([localAudio, localVideo]) => {
+      setAudioSrc(localAudio);
+      setVideoSrc(localVideo || FALLBACK_VIDEO);
+      setMediaChecked(true);
+    });
   }, []);
 
-  // 未登录跳转
+  // 直接加载医院和人员数据（无需登录）
   useEffect(() => {
-    if (authChecked && !user) router.replace("/login");
-  }, [authChecked, user, router]);
+    fetch("/api/auth?list=all-staff-full")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.staff) setAllStaff(d.staff);
+        if (d.hospitals) setHospitals(d.hospitals);
+      })
+      .catch(() => {});
+  }, []);
 
-  // 呼叫 / 响铃时播放 BGM，接通或结束时停止
-  useEffect(() => {
-    const audio = ringBgmRef.current;
-    if (!audio) return;
-    if (phase === "ringing" || phase === "calling") {
-      audio.currentTime = 0;
-      audio.play().catch(() => {});
+  // ============================================
+  // 流程导航
+  // ============================================
+
+  /** 点击"远程会诊"入口 */
+  const startConsultation = () => {
+    setPhase("select-hospital");
+  };
+
+  /** 选择医院 → 进入选科室 */
+  const onSelectHospital = (h: Hospital) => {
+    setSelectedHospital(h);
+    setSelectedDept(null);
+    setSelectedDoctor(null);
+    setResponseShown(false);
+    setResponseType("text");
+    setInputText("");
+    setPhase("select-department");
+  };
+
+  /** 选择科室 → 进入选医生 */
+  const onSelectDepartment = (d: Department) => {
+    setSelectedDept(d);
+    setSelectedDoctor(null);
+    setResponseShown(false);
+    setResponseType("text");
+    setInputText("");
+    // 过滤该科室的医生
+    const doctors = allStaff.filter(
+      (s) => s.hospitalId === selectedHospital?.id && s.deptId === d.id
+    );
+    setDeptDoctors(doctors);
+    setPhase("select-doctor");
+  };
+
+  /** 选择医生 → 进入会诊界面 */
+  const onSelectDoctor = (doc: StaffContact) => {
+    setSelectedDoctor(doc);
+    setResponseShown(false);
+    setResponseType("text");
+    setInputText("");
+    setPhase("consulting");
+  };
+
+  /** 提交输入文本，根据关键词触发不同响应 */
+  const handleSubmitInput = () => {
+    if (!inputText.trim()) return;
+    const text = inputText.trim();
+    if (text.includes("资料全部上传完毕")) {
+      setResponseType("audio");
+    } else if (text.includes("是否建立人工气道")) {
+      setResponseType("video");
     } else {
-      audio.pause();
-      audio.currentTime = 0;
+      setResponseType("text");
     }
-  }, [phase]);
-
-  // 主页面轮询等待来电（不自动接听，等待用户点击）
-  useEffect(() => {
-    if (!user || phase !== "idle") return;
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const res = await fetch("/api/call");
-        const data = await res.json();
-        const pending: any[] = data.pending || [];
-        const myCalls = pending.filter(
-          (c) => c.targetContact?.id === user.userId && (c.status === "waiting" || c.status === "ringing")
-        );
-        if (myCalls.length > 0) {
-          const call = myCalls[0];
-          // 保存来电信息，等用户点击接听后再调 answerIncomingCall
-          inboundCallIdRef.current = call.callId;
-          callIdRef.current = call.callId;
-          callRoleRef.current = "callee";
-          setIsVideoCall(call.callType === "video");
-          const incomingContact: StaffContact = {
-            id: call.callerId,
-            name: call.callerName,
-            title: "",
-            avatar: call.callerName?.slice(0, 1) || "?",
-            department: call.callerDepartment || "",
-            hospitalId: "",
-            hospitalName: call.callerHospitalName || "",
-            hospitalShortName: call.callerHospitalName || "",
-            deptId: "",
-          };
-          setTargetContact(incomingContact);
-          setPhase("ringing");
-          // 停掉轮询，等用户操作
-          if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
-        }
-      } catch {}
-    }, 1500);
-    return () => {
-      if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
-    };
-  }, [user, phase]);
-
-  const logout = async () => {
-    const token = localStorage.getItem("auth_token");
-    try {
-      await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-auth-token": token || "" },
-        body: JSON.stringify({ action: "logout" }),
-      });
-    } catch {}
-    localStorage.removeItem("auth_token");
-    localStorage.removeItem("auth_user");
-    router.replace("/login");
+    setResponseShown(true);
   };
 
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3000);
-  }, []);
-
-  const cleanupWebRTC = useCallback(() => {
-    if (signalTimerRef.current) { clearInterval(signalTimerRef.current); signalTimerRef.current = null; }
-    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
-    if (localStreamRef.current) { localStreamRef.current.getTracks().forEach((t) => t.stop()); localStreamRef.current = null; }
-    if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach((t) => t.stop()); remoteStreamRef.current = null; }
-    // 只清理 DOM 属性，不把 ref 置 null（否则后续 ontrack 拿不到元素导致连接断开）
-    if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
-  }, []);
-
-  const recordedSampleRateRef = useRef(16000); // 存储实际录音采样率
-
-  // --- 重采样：从实际采样率降到 16000Hz ---
-  const resampleTo16k = (chunks: Float32Array[], fromRate: number): Float32Array[] => {
-    if (fromRate === 16000) return chunks;
-    // 将所有 chunk 拼接为一个连续数组
-    let totalLen = 0;
-    for (const c of chunks) totalLen += c.length;
-    const merged = new Float32Array(totalLen);
-    let offset = 0;
-    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
-    // 线性插值重采样
-    const ratio = fromRate / 16000;
-    const newLen = Math.floor(totalLen / ratio);
-    const result = new Float32Array(newLen);
-    for (let i = 0; i < newLen; i++) {
-      const srcIdx = i * ratio;
-      const srcFloor = Math.floor(srcIdx);
-      const srcCeil = Math.min(srcFloor + 1, totalLen - 1);
-      const frac = srcIdx - srcFloor;
-      result[i] = merged[srcFloor] * (1 - frac) + merged[srcCeil] * frac;
-    }
-    return [result];
+  /** 返回首页 */
+  const goHome = () => {
+    setPhase("idle");
+    setSelectedHospital(null);
+    setSelectedDept(null);
+    setSelectedDoctor(null);
+    setResponseShown(false);
+    setResponseType("text");
+    setInputText("");
+    // 停止媒体播放
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+    if (videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime = 0; }
   };
 
-  // --- 录音 ---
-  const startRecording = useCallback(async () => {
-    try {
-      isStoppedRef.current = false;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      mediaStreamRef.current = stream;
-      const ctx = new AudioContext();
-      audioContextRef.current = ctx;
-      // 使用浏览器实际采样率（通常 44100 或 48000），后续重采样到 16kHz
-      recordedSampleRateRef.current = ctx.sampleRate;
-      console.log("录音采样率:", ctx.sampleRate, "Hz");
-      const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      scriptProcessorRef.current = processor;
-      pcmChunksRef.current = [];
-      processor.onaudioprocess = (e) => {
-        if (isStoppedRef.current) return;
-        pcmChunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-      };
-      source.connect(processor);
-      processor.connect(ctx.destination);
-      setPhase("listening");
-      setRecognizedText("");
-    } catch { showToast("无法访问麦克风，请检查权限"); }
-  }, [showToast]);
-
-  const stopRecording = useCallback(() => {
-    isStoppedRef.current = true;
-    if (scriptProcessorRef.current) { scriptProcessorRef.current.disconnect(); scriptProcessorRef.current = null; }
-    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
-    if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach((t) => t.stop()); mediaStreamRef.current = null; }
-    const chunks = pcmChunksRef.current;
-    pcmChunksRef.current = [];
-    if (!chunks.length) { setPhase("idle"); return; }
-    setPhase("processing");
-    // 重采样到 16000Hz 再发给百度语音识别
-    const resampled = resampleTo16k(chunks, recordedSampleRateRef.current);
-    processAudio(resampled);
-  }, []);
-
-  const float32ToWav = (channels: Float32Array[], sampleRate: number) => {
-    const totalLength = channels.reduce((s, c) => s + c.length, 0);
-    const buffer = new ArrayBuffer(44 + totalLength * 2);
-    const view = new DataView(buffer);
-    const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    writeStr(0, "RIFF"); view.setUint32(4, 36 + totalLength * 2, true); writeStr(8, "WAVE");
-    writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-    writeStr(36, "data"); view.setUint32(40, totalLength * 2, true);
-    let offset = 44;
-    for (const ch of channels) {
-      for (let j = 0; j < ch.length; j++) {
-        const s = Math.max(-1, Math.min(1, ch[j]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-        offset += 2;
-      }
-    }
-    return new Blob([buffer], { type: "audio/wav" });
+  const goBackStep = () => {
+    if (phase === "consulting") setPhase("select-doctor");
+    else if (phase === "select-doctor") setPhase("select-department");
+    else if (phase === "select-department") setPhase("select-hospital");
+    else goHome();
   };
 
-  // 音频增益（移动端麦克风音量偏小，需要放大）
-  const amplifyAudio = (chunks: Float32Array[], gain: number): Float32Array[] => {
-    return chunks.map((ch) => {
-      const out = new Float32Array(ch.length);
-      for (let i = 0; i < ch.length; i++) {
-        out[i] = Math.max(-1, Math.min(1, ch[i] * gain));
-      }
-      return out;
-    });
-  };
+  // ============================================
+  // 渲染：主页面（卡片风格）
+  // ============================================
+  if (phase === "idle") {
+    return <MainPage onRemoteConsult={startConsultation} />;
+  }
 
-  const processAudio = async (chunks: Float32Array[]) => {
-    try {
-      // 计算音频 RMS 电平用于调试
-      let sumSq = 0, totalSamples = 0;
-      for (const c of chunks) { for (let i = 0; i < c.length; i++) { sumSq += c[i] * c[i]; } totalSamples += c.length; }
-      const rms = Math.sqrt(sumSq / totalSamples);
-      console.log(`音频 RMS: ${(rms * 100).toFixed(2)}%, 总采样: ${totalSamples}, ${(totalSamples / 16000).toFixed(1)}s`);
-
-      // 如果音频太短（< 0.5 秒），很可能是误触，不做识别
-      const duration = totalSamples / 16000;
-      if (duration < 0.5) {
-        showToast("录音时间太短，请长按说话");
-        setPhase("idle");
-        return;
-      }
-
-      // 自动增益：RMS < 5% 时放大到 20% 左右
-      let amplified = chunks;
-      if (rms < 0.05 && rms > 0.001) {
-        const gain = Math.min(10, 0.20 / rms);
-        amplified = amplifyAudio(chunks, gain);
-        console.log(`应用音频增益: ${gain.toFixed(1)}x`);
-      }
-
-      // 重采样后始终以 16000 编码 WAV
-      const wav = float32ToWav(amplified, 16000);
-      const form = new FormData();
-      form.append("audio", wav, "audio.wav");
-      const res = await fetch("/api/speech-to-text", { method: "POST", body: form });
-      const data = await res.json();
-      if (!data.success || !data.text) { showToast(data.error || "语音识别失败，请大声清晰说话"); setPhase("idle"); return; }
-      setRecognizedText(data.text.trim());
-      await chatWithAI(data.text.trim());
-    } catch { showToast("语音识别服务异常"); setPhase("idle"); }
-  };
-
-  const chatWithAI = async (text: string) => {
-    try {
-      const history = convos.slice(0, 3).map((c) => ({ role: "user" as const, content: c.question }));
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          history,
-          callerName: user?.name || "",
-          callerDepartment: user?.department || "",
-        }),
-      });
-      const data = await res.json();
-      setAiAnswer(data.answer);
-
-      const convo: Conversation = {
-        id: `conv-${Date.now()}`,
-        question: text,
-        answer: data.answer,
-        contact: data.contact || null,
-      };
-      setConvos((prev) => [convo, ...prev]);
-
-      if (data.action === "call" && data.contact) {
-        const fullContact: StaffContact = {
-          id: data.contact.id,
-          name: data.contact.name,
-          title: data.contact.title,
-          avatar: data.contact.avatar,
-          department: data.contact.department,
-          hospitalId: data.contact.hospitalId || "",
-          hospitalName: data.contact.hospitalName || "",
-          hospitalShortName: data.contact.hospitalShortName || "",
-          deptId: data.contact.deptId || "",
-        };
-        setTargetContact(fullContact);
-        callRoleRef.current = "caller";
-        setIsVideoCall(true);
-        const callRes = await fetch("/api/call", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "create",
-            callType: "video",
-            callerId: user?.userId || "unknown",
-            callerName: user?.name || "",
-            callerDepartment: user?.department || "",
-            callerHospitalName: user?.hospitalName || "",
-            contact: fullContact,
-          }),
-        });
-        const callData = await callRes.json();
-        callIdRef.current = callData.callId;
-        setPhase("calling");
-        await establishCall(fullContact, true);
-      } else {
-        setPhase("reply");
-      }
-    } catch {
-      setAiAnswer("抱歉，系统暂时出现问题，请稍后再试。");
-      setPhase("reply");
-    }
-  };
-
-  // 直接拨号（从通讯录）
-  const directCall = async (contact: StaffContact) => {
-    setShowContacts(false);
-    setTargetContact(contact);
-    callRoleRef.current = "caller";
-    setIsVideoCall(true);
-    const convo: Conversation = {
-      id: `conv-${Date.now()}`,
-      question: `呼叫 ${contact.name}`,
-      answer: `正在呼叫${contact.name}（${contact.hospitalShortName} ${contact.department}）...`,
-      contact,
-    };
-    setConvos((prev) => [convo, ...prev]);
-    const callRes = await fetch("/api/call", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "create",
-        callType: "video",
-        callerId: user?.userId || "unknown",
-        callerName: user?.name || "",
-        callerDepartment: user?.department || "",
-        callerHospitalName: user?.hospitalName || "",
-        contact,
-      }),
-    });
-    const callData = await callRes.json();
-    callIdRef.current = callData.callId;
-    setPhase("calling");
-    await establishCall(contact, true);
-  };
-
-  // 被叫端：接听并建立 WebRTC 视频连接（需用户手势触发）
-  const answerIncomingCall = async (incomingCallId: string) => {
-    try {
-      cleanupWebRTC();
-
-      // 先尝试获取媒体流，使用宽松约束（true）兼容更多设备
-      let localStream: MediaStream;
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-      } catch (mediaErr: any) {
-        console.error("getUserMedia 失败:", mediaErr.name, mediaErr.message);
-        if (mediaErr.name === "NotFoundError" || mediaErr.name === "DevicesNotFoundError") {
-          showToast("未检测到摄像头或麦克风设备");
-        } else if (mediaErr.name === "NotAllowedError") {
-          showToast("麦克风/摄像头权限被拒绝，请在浏览器设置中允许");
-        } else if (mediaErr.name === "NotReadableError") {
-          showToast("摄像头/麦克风被其他应用占用");
-        } else {
-          // 可能是 HTTP 环境导致的安全限制
-          showToast("获取媒体设备失败，请确认使用 HTTPS 访问页面");
-        }
-        hangup();
-        return;
-      }
-
-      localStreamRef.current = localStream;
-      if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
-
-      const pc = createPeerConnection();
-      pcRef.current = pc;
-      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
-
-      pc.ontrack = (e) => {
-        remoteStreamRef.current = e.streams[0];
-        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = e.streams[0]; remoteAudioRef.current.play().catch(() => {}); }
-        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = e.streams[0];
-      };
-
-      pc.onicecandidate = (e) => { if (e.candidate) sendSignal("ice-candidate", e.candidate); };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "connected") startCallTimer();
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") hangup();
-      };
-
-      // 标记接听
-      fetch("/api/call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "accept", callId: incomingCallId }),
-      }).catch(() => {});
-
-      // 轮询等待 caller 发来的 offer 和 ice-candidates
-      signalTimerRef.current = setInterval(async () => {
-        const events = await fetchSignals("callee");
-        for (const ev of events) {
-          if (ev.type === "offer") {
-            if (!pcRef.current) return;
-            await pcRef.current.setRemoteDescription(new RTCSessionDescription(ev.data));
-            const answer = await pcRef.current.createAnswer();
-            await pcRef.current.setLocalDescription(answer);
-            sendSignal("answer", answer);
-          } else if (ev.type === "ice-candidate") {
-            try { if (pcRef.current) await pcRef.current.addIceCandidate(new RTCIceCandidate(ev.data)); } catch {}
-          } else if (ev.type === "call-ended") {
-            if (signalTimerRef.current) clearInterval(signalTimerRef.current);
-            hangup();
-          }
-        }
-      }, SIGNAL_POLL_INTERVAL);
-    } catch (err: any) {
-      console.error("接听异常:", err);
-      showToast("接听失败，请重试");
-      hangup();
-    }
-  };
-
-  const establishCall = async (contact: { id: string; name: string; avatar: string; department: string }, video: boolean) => {
-    try {
-      cleanupWebRTC();
-      const constraints: MediaStreamConstraints = video ? { audio: true, video: true } : { audio: true, video: false };
-      const localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      localStreamRef.current = localStream;
-      if (video && localVideoRef.current) localVideoRef.current.srcObject = localStream;
-      const pc = createPeerConnection();
-      pcRef.current = pc;
-      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
-      pc.ontrack = (e) => {
-        remoteStreamRef.current = e.streams[0];
-        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = e.streams[0]; remoteAudioRef.current.play().catch(() => {}); }
-        if (video && remoteVideoRef.current) remoteVideoRef.current.srcObject = e.streams[0];
-      };
-      pc.onicecandidate = (e) => { if (e.candidate) sendSignal("ice-candidate", e.candidate); };
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "connected") startCallTimer();
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") hangup();
-      };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendSignal("offer", offer);
-      signalTimerRef.current = setInterval(async () => {
-        const events = await fetchSignals("caller");
-        for (const ev of events) {
-          if (ev.type === "answer") {
-            await pc.setRemoteDescription(new RTCSessionDescription(ev.data));
-          } else if (ev.type === "ice-candidate") {
-            try { await pc.addIceCandidate(new RTCIceCandidate(ev.data)); } catch {}
-          } else if (ev.type === "call-ended") {
-            if (signalTimerRef.current) clearInterval(signalTimerRef.current);
-            hangup();
-          }
-        }
-      }, SIGNAL_POLL_INTERVAL);
-      fetch("/api/call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "ringing", callId: callIdRef.current }),
-      });
-      setPhase("ringing");
-    } catch {
-      showToast("呼叫失败，请重试");
-      hangup();
-    }
-  };
-
-  const sendSignal = async (type: string, data: unknown) => {
-    try {
-      await fetch("/api/signal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type, callId: callIdRef.current, data, fromRole: callRoleRef.current }) });
-    } catch {}
-  };
-
-  const fetchSignals = async (_role: "caller" | "callee"): Promise<{ type: string; data: any }[]> => {
-    // 挂断后 callId 已被清空，停止无意义的请求
-    if (!callIdRef.current) return [];
-    try {
-      const res = await fetch(`/api/signal?callId=${callIdRef.current}&role=${_role}`);
-      if (!res.ok) return [];
-      const json = await res.json();
-      return json.messages || [];
-    } catch { return []; }
-  };
-
-  const startCallTimer = useCallback(() => {
-    if (callTimerRef.current) return;
-    setCallDuration(0);
-    callTimerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
-    setPhase("incall");
-  }, []);
-
-  const formatDuration = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
-
-  // 主叫页手动接听来电（由用户点击触发 → 有用户手势 → 权限通过）
-  const handleAnswerIncoming = useCallback(() => {
-    if (!inboundCallIdRef.current) return;
-    // 点击接听后清除来电标记，防止重复触发
-    const cid = inboundCallIdRef.current;
-    inboundCallIdRef.current = "";
-    answerIncomingCall(cid);
-  }, []);
-
-  const hangup = useCallback(() => {
-    // 防重入：防止 pc.close() 触发 onconnectionstatechange 再次调用 hangup
-    if (isHangingUpRef.current) return;
-    isHangingUpRef.current = true;
-    inboundCallIdRef.current = "";
-    
-    // 立即切换 UI，不等待网络请求
-    setPhase("ended");
-    
-    // 先停轮询，再关 PC，避免 close 触发回调死循环
-    if (signalTimerRef.current) { clearInterval(signalTimerRef.current); signalTimerRef.current = null; }
-    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
-    if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
-    
-    try {
-      if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
-      if (localStreamRef.current) { localStreamRef.current.getTracks().forEach((t) => t.stop()); localStreamRef.current = null; }
-      if (remoteStreamRef.current) { remoteStreamRef.current.getTracks().forEach((t) => t.stop()); remoteStreamRef.current = null; }
-      // 只清理 DOM 属性，不把 ref 置 null
-      if (remoteAudioRef.current) { remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; }
-    } catch (e) {
-      console.error("hangup cleanup error:", e);
-    }
-    
-    // 通知对方挂断（通话对方）
-    const endedCallId = callIdRef.current;
-    // 异步通知对方
-    if (endedCallId) {
-      sendSignal("call-ended", null).catch(() => {});
-      fetch("/api/call", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "end", callId: endedCallId }),
-      }).catch(() => {});
-    }
-    // 挂断后清空 callId，防止后续误用
-    callIdRef.current = "";
-    
-    isHangingUpRef.current = false;
-  }, []);
-
-  const toggleMute = () => {
-    if (localStreamRef.current) {
-      const t = localStreamRef.current.getAudioTracks()[0];
-      if (t) { t.enabled = isMuted; setIsMuted(!isMuted); }
-    }
-  };
-
-  const toggleSpeaker = () => setIsSpeakerOn(!isSpeakerOn);
-  const toggleVideo = async () => {
-    if (isVideoCall) {
-      // 停止并从 stream 中移除所有视频轨道
-      const stream = localStreamRef.current;
-      if (stream) {
-        stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
-        // 通过 PC sender 告知对方视频已关闭
-        const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) sender.replaceTrack(null);
-      }
-      setIsVideoCall(false);
-    }
-    else {
-      try {
-        const vs = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (pcRef.current && vs.getVideoTracks().length > 0) {
-          const newVideoTrack = vs.getVideoTracks()[0];
-          // 清理 localStream 中残留的旧视频轨道
-          if (localStreamRef.current) {
-            localStreamRef.current.getVideoTracks().forEach((t) => localStreamRef.current!.removeTrack(t));
-            localStreamRef.current.addTrack(newVideoTrack);
-          }
-          // 告知对方视频恢复
-          const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) sender.replaceTrack(newVideoTrack);
-          else pcRef.current.addTrack(newVideoTrack, localStreamRef.current!);
-          // 先置空再赋值，强制 video 元素刷新
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = null;
-            localVideoRef.current.srcObject = localStreamRef.current;
-          }
-        }
-        setIsVideoCall(true);
-      } catch { showToast("无法打开摄像头"); }
-    }
-  };
-
-  const goIdle = () => { hangup(); setPhase("idle"); setRecognizedText(""); setAiAnswer(""); setTargetContact(null); setCallDuration(0); setIsVideoCall(false); setIsMuted(false); };
-
-  // 所有 Hooks 必须在 early return 之前调用，确保每次渲染 Hook 数量和顺序一致
-  const audioRefCallback = useCallback((el: HTMLAudioElement | null) => { remoteAudioRef.current = el; }, []);
-  const ringBgmCallback = useCallback((el: HTMLAudioElement | null) => { ringBgmRef.current = el; }, []);
-  const localVideoRefCallback = useCallback((el: HTMLVideoElement | null) => { localVideoRef.current = el; }, []);
-  const remoteVideoRefCallback = useCallback((el: HTMLVideoElement | null) => { remoteVideoRef.current = el; }, []);
-
-  if (!authChecked || !user) {
+  // ============================================
+  // 渲染：选择医院
+  // ============================================
+  if (phase === "select-hospital") {
     return (
-      <main className="h-screen bg-gradient-to-b from-gray-900 via-gray-950 to-black flex items-center justify-center">
-        <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full" />
+      <main className="min-h-dvh bg-gradient-to-b from-slate-50 to-blue-50">
+        <TopBar title="选择医院" onBack={goHome} />
+        <div className="px-5 pt-4 pb-6 space-y-3">
+          {hospitals.length === 0 ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full mr-2" />
+              <span className="text-sm text-gray-400">加载医院列表中...</span>
+            </div>
+          ) : (
+            hospitals.map((h) => (
+            <button
+              key={h.id}
+              onClick={() => onSelectHospital(h)}
+              className="w-full bg-white rounded-2xl p-4 flex items-center gap-4 shadow-sm active:scale-[0.98] transition-all"
+            >
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-lg">
+                {h.shortName[0]}
+              </div>
+              <div className="text-left flex-1">
+                <div className="text-base font-semibold text-gray-800">{h.name}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{h.departments.length} 个科室</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          ))
+          )}
+        </div>
       </main>
     );
   }
 
-  return (
-    <main className="h-dvh bg-gradient-to-b from-gray-900 via-gray-950 to-black text-white flex flex-col overflow-hidden">
-      <audio ref={ringBgmCallback} src="/ringtone.mp3" loop preload="auto" className="hidden" />
-      <audio ref={audioRefCallback} autoPlay playsInline className="hidden" />
-
-      {/* Toast */}
-      {toast && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-red-500/90 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-lg animate-slide-down">
-          {toast}
+  // ============================================
+  // 渲染：选择科室
+  // ============================================
+  if (phase === "select-department") {
+    return (
+      <main className="min-h-dvh bg-gradient-to-b from-slate-50 to-blue-50">
+        <TopBar title="选择科室" onBack={() => setPhase("select-hospital")} subtitle={selectedHospital?.name} />
+        <div className="px-5 pt-4 pb-6 space-y-3">
+          {selectedHospital?.departments.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => onSelectDepartment(d)}
+              className="w-full bg-white rounded-2xl p-4 flex items-center gap-4 shadow-sm active:scale-[0.98] transition-all"
+            >
+              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 font-bold text-sm">
+                {d.name.slice(0, 2)}
+              </div>
+              <div className="text-left flex-1">
+                <div className="text-base font-semibold text-gray-800">{d.name}</div>
+                <div className="text-xs text-gray-400 mt-0.5">点击进入选择医生</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          ))}
         </div>
-      )}
+      </main>
+    );
+  }
 
-      {/* ======== 联系人面板 ======== */}
-      {showContacts && (
-        <div className="fixed inset-0 z-40 bg-black/70 animate-overlay-in" onClick={() => setShowContacts(false)}>
-          <div className="absolute bottom-0 left-0 right-0 bg-gray-900 rounded-t-3xl p-5 max-h-[75vh] overflow-y-auto animate-modal-in" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4 sticky top-0 bg-gray-900 pb-2 z-10">
-              <h3 className="text-base font-semibold">全院医护通讯录</h3>
-              <button onClick={() => setShowContacts(false)} className="text-gray-400 hover:text-white text-xl">&times;</button>
-            </div>
-            <div className="space-y-4">
-              {contactGroups.map((group) => (
-                <div key={`${group.hospitalName}__${group.deptName}`}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[11px] text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded">{group.hospitalShortName}</span>
-                    <span className="text-xs text-gray-400">{group.deptName}</span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {group.contacts.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => directCall(c)}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-all text-left"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-blue-500 flex items-center justify-center text-sm font-bold">
-                          {c.avatar}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-white">{c.name}</div>
-                          <div className="text-[11px] text-gray-400">{c.title}</div>
-                        </div>
-                        <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.362 1.903.72 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.358 1.85.593 2.81.72A2 2 0 0122 16.92z" />
-                          </svg>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+  // ============================================
+  // 渲染：选择医生
+  // ============================================
+  if (phase === "select-doctor") {
+    return (
+      <main className="min-h-dvh bg-gradient-to-b from-slate-50 to-blue-50">
+        <TopBar title="选择医生" onBack={() => setPhase("select-department")} subtitle={`${selectedHospital?.shortName} · ${selectedDept?.name}`} />
+        <div className="px-5 pt-4 pb-6 space-y-3">
+          {deptDoctors.length === 0 && (
+            <div className="text-center py-12 text-gray-400 text-sm">该科室暂无医生</div>
+          )}
+          {deptDoctors.map((doc) => (
+            <button
+              key={doc.id}
+              onClick={() => onSelectDoctor(doc)}
+              className="w-full bg-white rounded-2xl p-4 flex items-center gap-4 shadow-sm active:scale-[0.98] transition-all"
+            >
+              <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-base">
+                {doc.avatar}
+              </div>
+              <div className="text-left flex-1">
+                <div className="text-base font-semibold text-gray-800">{doc.name}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{doc.title}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="2">
+                <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          ))}
+        </div>
+      </main>
+    );
+  }
+
+  // ============================================
+  // 渲染：会诊界面（输入 + 响应）— 关键词"资料全部上传完毕"=音频 / "是否建立人工气道"=视频
+  // ============================================
+  if (phase === "consulting") {
+    return (
+      <main className="min-h-dvh bg-gradient-to-b from-slate-50 to-blue-50">
+        <TopBar title="远程会诊" onBack={goBackStep} subtitle={`${selectedDoctor?.name} · ${selectedDept?.name}`} />
+
+        {/* 医生信息卡片 */}
+        <div className="px-5 pt-4">
+          <div className="bg-white rounded-2xl p-5 mb-4 shadow-sm">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-md">
+                {selectedDoctor?.avatar}
+              </div>
+              <div>
+                <div className="text-lg font-bold text-gray-800">{selectedDoctor?.name}</div>
+                <div className="text-sm text-gray-500">{selectedDoctor?.title}</div>
+                <div className="text-xs text-blue-500 mt-1">{selectedHospital?.shortName} · {selectedDept?.name}</div>
+              </div>
             </div>
           </div>
         </div>
-      )}
 
-      {/* ======== 空闲 / 对话 ======== */}
-      {(phase === "idle" || phase === "listening" || phase === "processing" || phase === "reply") && (
-        <div className="flex-1 flex flex-col">
-          <Header
-            user={user}
-            onShowContacts={() => setShowContacts(true)}
-            onLogout={logout}
-          />
-          <ConversationArea convos={convos} recognizedText={recognizedText} aiAnswer={aiAnswer} phase={phase} user={user} />
-          <MicButton
-            phase={phase}
-            onStart={startRecording}
-            onStop={stopRecording}
-            onContinue={() => setPhase("idle")}
-            onContacts={() => setShowContacts(true)}
-          />
+        {!responseShown ? (
+          /* ===== 输入区域：键盘打字 ===== */
+          <div className="px-5 pb-6">
+            <div className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="M6 8h12M6 12h12M6 16h4" />
+                </svg>
+                <label className="text-sm font-medium text-gray-600">键盘输入会诊内容</label>
+              </div>
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="请输入内容"
+                rows={3}
+                className="w-full border border-gray-200 rounded-xl p-3 text-sm text-gray-700 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100 resize-none transition-all"
+              />
+              <button
+                onClick={handleSubmitInput}
+                disabled={!inputText.trim()}
+                className="mt-3 w-full py-3 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-medium text-sm active:scale-[0.98] transition-all disabled:opacity-40 disabled:active:scale-100"
+              >
+                发送
+              </button>
+            </div>
+          </div>
+        ) : responseType === "audio" ? (
+          /* ===== 音频响应 ===== */
+          <div className="px-5 pb-6 space-y-4 animate-fade-in">
+            {/* 已发送消息气泡 */}
+            <div className="flex justify-end">
+              <div className="max-w-[80%] bg-blue-500 text-white rounded-2xl rounded-br-md px-4 py-3 text-sm">
+                {inputText}
+              </div>
+            </div>
+            {/* 医生回复 — 音频卡片 */}
+            <div className="flex gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-green-600 flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-sm">
+                {selectedDoctor?.avatar}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-400 ml-1 mb-1">{selectedDoctor?.name} · 语音回复</div>
+                <div className="bg-white rounded-2xl rounded-tl-md shadow-sm overflow-hidden">
+                  {/* 音频波形装饰 */}
+                  <div className="bg-gradient-to-r from-emerald-400 to-green-500 px-4 py-5">
+                    <div className="flex items-center justify-center gap-1 h-10">
+                      {[1, 0.7, 1, 0.5, 0.9, 0.6, 1, 0.4, 0.8, 0.5, 1, 0.7].map((scale, i) => (
+                        <div
+                          key={i}
+                          className="w-1 bg-white/80 rounded-full animate-pulse"
+                          style={{ height: `${scale * 100}%`, animationDelay: `${i * 0.1}s` }}
+                        />
+                      ))}
+                    </div>
+                    <p className="text-center text-white/60 text-xs mt-2 font-medium">🔊 语音消息</p>
+                  </div>
+                  {/* 音频播放器 */}
+                  <div className="p-4">
+                    <p className="text-sm text-gray-700 leading-relaxed mb-3">
+                      患者为上感诱发急性喉梗阻，保守治疗无效，即刻行气管插管开放气道，纠正缺氧，保障生命体征稳定。
+                    </p>
+                    {audioSrc ? (
+                      /* 本地文件存在 → 用真实 mp3 */
+                      <audio
+                        ref={audioRef}
+                        src={audioSrc}
+                        controls
+                        controlsList="nodownload"
+                        className="w-full h-10"
+                        autoPlay
+                      >
+                        您的浏览器不支持音频播放
+                      </audio>
+                    ) : (
+                      /* 无本地文件 → 在线 TTS 合成语音 */
+                      <EmergencyTTSAudio
+                        text="患者为上感诱发急性喉梗阻，保守治疗无效，即刻行气管插管开放气道，纠正缺氧，保障生命体征稳定。"
+                        audioRef={audioRef}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={goHome}
+              className="w-full py-3 rounded-xl bg-gray-100 text-gray-600 font-medium text-sm active:scale-[0.98] transition-all"
+            >
+              返回首页
+            </button>
+          </div>
+        ) : responseType === "video" ? (
+          /* ===== 视频响应 ===== */
+          <div className="px-0 pb-6 animate-fade-in">
+            {/* 已发送消息 */}
+            <div className="px-5 mb-3 flex justify-end">
+              <div className="max-w-[80%] bg-blue-500 text-white rounded-2xl rounded-br-md px-4 py-3 text-sm">
+                {inputText}
+              </div>
+            </div>
+            {/* 视频播放器 — 全宽、大屏（本地优先，在线兜底） */ }
+            <div className="bg-black">
+              {mediaChecked && (
+                <video
+                  ref={videoRef}
+                  src={videoSrc!}
+                  controls
+                  autoPlay
+                  controlsList="nodownload"
+                  playsInline
+                  className="w-full"
+                  style={{ maxHeight: "60vh" }}
+                  poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300'%3E%3Crect fill='%231e1b4b' width='400' height='300'/%3E%3Ctext fill='%23c7d2fe' x='50%25' y='45%25' text-anchor='middle' font-size='14'%3E📹 视频消息%3C/text%3E%3Ctext fill='%23818cf8' x='50%25' y='55%25' text-anchor='middle' font-size='12'%3E{selectedDoctor?.name} · 呼吸科%3C/text%3E%3C/svg%3E"
+                >
+                  您的浏览器不支持视频播放
+                </video>
+              )}
+              {!mediaChecked && (
+                <div className="flex items-center justify-center py-20">
+                  <div className="animate-spin w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full mr-2" />
+                  <span className="text-white/60 text-sm">加载视频中...</span>
+                </div>
+              )}
+            </div>
+            {/* 视频信息条 */}
+            <div className="px-5 mt-3">
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
+                    {selectedDoctor?.avatar}
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-gray-800">{selectedDoctor?.name}</div>
+                    <div className="text-xs text-gray-400">{selectedDoctor?.title}</div>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600">已为您播放预先录制的会诊视频回复</p>
+              </div>
+              <button
+                onClick={goHome}
+                className="w-full mt-3 py-3 rounded-xl bg-gray-100 text-gray-600 font-medium text-sm active:scale-[0.98] transition-all"
+              >
+                返回首页
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* ===== 文字回复 ===== */
+          <div className="px-5 pb-6 space-y-4 animate-fade-in">
+            <div className="flex justify-end">
+              <div className="max-w-[80%] bg-blue-500 text-white rounded-2xl rounded-br-md px-4 py-3 text-sm">
+                {inputText}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-sm">
+                {selectedDoctor?.avatar}
+              </div>
+              <div className="flex-1">
+                <div className="text-xs text-gray-400 ml-1 mb-1">{selectedDoctor?.name}</div>
+                <div className="bg-white rounded-2xl rounded-tl-md shadow-sm px-4 py-3">
+                  <p className="text-sm text-gray-600 leading-relaxed">
+                    已收到您的会诊请求，{selectedDoctor?.name} 医生将尽快回复。
+                  </p>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={goHome}
+              className="w-full py-3 rounded-xl bg-gray-100 text-gray-600 font-medium text-sm active:scale-[0.98] transition-all"
+            >
+              返回首页
+            </button>
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  return null;
+}
+
+// ============================================
+// 顶部导航栏
+// ============================================
+function TopBar({ title, onBack, subtitle }: { title: string; onBack: () => void; subtitle?: string }) {
+  return (
+    <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-100">
+      <div className="flex items-center px-4 h-14">
+        <button onClick={onBack} className="mr-3 p-1 -ml-1 active:opacity-60 transition-opacity">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        <div>
+          <div className="text-base font-semibold text-gray-800">{title}</div>
+          {subtitle && <div className="text-[11px] text-gray-400 -mt-0.5">{subtitle}</div>}
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
 
-      {/* ======== 呼叫中 / 响铃 / 通话中 ======== */}
-      {(phase === "calling" || phase === "ringing" || phase === "incall") && (
-        <CallScreen
-          phase={phase}
-          contact={targetContact}
-          duration={formatDuration(callDuration)}
-          isMuted={isMuted}
-          isSpeakerOn={isSpeakerOn}
-          isVideoCall={isVideoCall}
-          localVideoRef={localVideoRefCallback}
-          remoteVideoRef={remoteVideoRefCallback}
-          onToggleMute={toggleMute}
-          onToggleSpeaker={toggleSpeaker}
-          onToggleVideo={toggleVideo}
-          onHangup={hangup}
-          onAnswer={handleAnswerIncoming}
-          isIncoming={callRoleRef.current === "callee"}
-          callerName={user?.name || ""}
-          callerDept={user?.department || ""}
+// ============================================
+// 主页面 — 卡片风格
+// ============================================
+function MainPage({ onRemoteConsult }: { onRemoteConsult: () => void }) {
+  return (
+    <main className="min-h-dvh bg-gradient-to-b from-white via-blue-50/50 to-blue-50">
+      {/* 顶部栏 */}
+      <header className="flex items-center justify-between px-5 pt-4 pb-2">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+            <span className="text-white text-xs font-bold">协</span>
+          </div>
+          <span className="font-bold text-base text-gray-800">协同诊疗系统</span>
+        </div>
+      </header>
+
+      {/* 主标题区 */}
+      <div className="px-5 pt-6 pb-4 relative">
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">虚拟病人问诊系统</h1>
+        <p className="text-sm text-gray-400 mt-1">沉浸式病史采集</p>
+
+        {/* 盾牌图标 */}
+        <div className="absolute right-5 top-6 w-28 h-28 opacity-90 pointer-events-none">
+          <svg viewBox="0 0 120 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M60 4L108 22V58C108 92 78 122 60 136C42 122 12 92 12 58V22L60 4Z" fill="url(#shieldGrad)" fillOpacity="0.15" stroke="#93c5fd" strokeWidth="1.5"/>
+            <path d="M48 68L56 76L74 54" stroke="#3b82f6" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
+            <rect x="44" y="44" width="32" height="26" rx="3" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.5"/>
+            <line x1="52" y1="52" x2="68" y2="52" stroke="#3b82f6" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="52" y1="59" x2="64" y2="59" stroke="#3b82f6" strokeWidth="1.5" strokeLinecap="round"/>
+            <defs>
+              <linearGradient id="shieldGrad" x1="60" y1="4" x2="60" y2="136" gradientUnits="userSpaceOnUse">
+                <stop stopColor="#3b82f6" stopOpacity="0.3"/>
+                <stop offset="1" stopColor="#93c5fd" stopOpacity="0.05"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+      </div>
+
+      {/* 搜索框 */}
+      <div className="px-5 pb-5">
+        <div className="bg-white rounded-2xl px-4 py-3.5 flex items-center gap-3 shadow-sm border border-gray-100">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35" strokeLinecap="round"/>
+          </svg>
+          <span className="text-sm text-gray-400">选择权威病例，铸就医学标杆</span>
+        </div>
+      </div>
+
+      {/* 功能卡片列表 */}
+      <div className="px-5 space-y-3 pb-8">
+
+        {/* 远程会诊 — 可点击入口 */}
+        <FeatureCard
+          icon={
+            <div className="w-11 h-11 rounded-xl bg-red-50 flex items-center justify-center">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.8">
+                <path d="M23 7l-7 5 7 5V7zM14 5H3a2 2 0 00-2 2v10a2 2 0 002 2h11a2 2 0 002-2V7a2 2 0 00-2-2z" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+          }
+          colorClass="red"
+          title="远程会诊"
+          desc="跨院协同 多学科联合会诊"
+          onClick={onRemoteConsult}
+          highlight
         />
-      )}
 
-      {/* ======== 结束 ======== */}
-      {phase === "ended" && (
-        <CallEndedScreen contact={targetContact} duration={formatDuration(callDuration)} onBack={goIdle} />
-      )}
+      </div>
     </main>
   );
 }
 
 // ============================================
-// Header
+// 功能卡片
 // ============================================
-function Header({ user, onShowContacts, onLogout }: {
-  user: UserIdentity; onShowContacts: () => void; onLogout: () => void;
+function FeatureCard({
+  icon,
+  colorClass,
+  title,
+  desc,
+  onClick,
+  highlight,
+}: {
+  icon: React.ReactNode;
+  colorClass: string;
+  title: string;
+  desc: string;
+  onClick?: () => void;
+  highlight?: boolean;
 }) {
-  return (
-    <div className="px-4 py-2">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-blue-500 flex items-center justify-center font-bold text-xs">H</div>
-          <span className="font-semibold text-sm">Hospeech</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">医护端</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={onShowContacts} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs text-gray-300 transition-all">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" />
-            </svg>
-            科室通讯
-          </button>
-          <button onClick={onLogout} className="text-xs text-gray-500 hover:text-gray-300 px-2 py-1.5 rounded-lg hover:bg-white/5 transition-all">退出</button>
-        </div>
-      </div>
-      <div className="flex items-center gap-2 px-1">
-        <div className="w-6 h-6 rounded-full bg-blue-500/30 flex items-center justify-center text-[10px] font-bold text-blue-400">
-          {user.name.slice(0, 1)}
-        </div>
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span className="text-sm text-white font-medium">{user.name}</span>
-          {user.department && <span className="text-xs text-gray-400">{user.department}</span>}
-          {user.hospitalName && <span className="text-[10px] text-gray-500">{user.hospitalName}</span>}
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
-            {user.department?.slice(0, 4) || "医护"}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
+  const colorMap: Record<string, { border: string; arrow: string }> = {
+    emerald: { border: "border-l-emerald-400", arrow: "#10b981" },
+    orange:  { border: "border-l-orange-400", arrow: "#f97316" },
+    blue:    { border: "border-l-blue-400",   arrow: "#3b82f6" },
+    purple:  { border: "border-l-purple-400", arrow: "#a855f7" },
+    red:     { border: "border-l-red-400",    arrow: "#ef4444" },
+  };
 
-// ============================================
-// 对话区域
-// ============================================
-function ConversationArea({ convos, recognizedText, aiAnswer, phase, user }: {
-  convos: Conversation[]; recognizedText: string; aiAnswer: string; phase: Phase; user: UserIdentity | null;
-}) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [convos, recognizedText, aiAnswer]);
-
-  if (convos.length === 0 && !recognizedText) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-        <div className="w-14 h-14 rounded-full bg-blue-500/10 flex items-center justify-center mb-4">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="1.5">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
-        </div>
-        <h2 className="text-base font-medium text-white mb-1">{user ? `${user.name} 医生，你好` : "你好"}</h2>
-        <p className="text-xs text-gray-400 leading-relaxed">
-          点击 <span className="text-blue-400 font-medium">科室通讯</span> 可拨号给任何科室的医生<br />长按麦克风说出医生姓名也可快速呼叫
-        </p>
-      </div>
-    );
-  }
+  const c = colorMap[colorClass] || colorMap.blue;
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-      {convos.map((c) => (
-        <div key={c.id} className="animate-fade-in">
-          <div className="flex justify-end mb-2">
-            <div className="max-w-[80%] bg-blue-600 text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
-              <div className="text-[10px] text-blue-200 mb-0.5">{user?.name || "我"}</div>
-              {c.question}
-            </div>
-          </div>
-          <div className="flex justify-start">
-            <div className="max-w-[80%] bg-white/10 text-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
-              {c.answer}
-              {c.contact && (
-                <div className="mt-2 pt-2 border-t border-white/10 flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold">{c.contact.avatar}</div>
-                  <div>
-                    <div className="text-xs font-medium">{c.contact.name}</div>
-                    <div className="text-[10px] text-gray-400">{c.contact.hospitalShortName} · {c.contact.department}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ))}
-      {phase === "processing" && recognizedText && (
-        <div className="flex justify-end mb-2">
-          <div className="max-w-[80%] bg-blue-600/70 text-white rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
-            <div className="text-[10px] text-blue-200 mb-0.5">{user?.name || "我"}</div>
-            {recognizedText}
-          </div>
-        </div>
-      )}
-      {phase === "processing" && (
-        <div className="flex justify-start">
-          <div className="bg-white/10 rounded-2xl rounded-bl-md px-4 py-2.5 flex items-center gap-2">
-            <Spinner /><span className="text-sm text-gray-300">识别中...</span>
-          </div>
-        </div>
-      )}
-      <div ref={bottomRef} />
-    </div>
-  );
-}
-
-// ============================================
-// 麦克风按钮
-// ============================================
-function MicButton({ phase, onStart, onStop, onContinue, onContacts }: {
-  phase: Phase; onStart: () => void; onStop: () => void; onContinue: () => void; onContacts: () => void;
-}) {
-  const isActive = phase === "listening";
-  const isProcessing = phase === "processing";
-
-  return (
-    <div className="pb-3 pt-1 flex flex-col items-center gap-2.5">
-      {phase === "idle" && (
-        <button onClick={onContacts} className="text-xs text-gray-400 hover:text-blue-400 transition-all flex items-center gap-1">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" /><circle cx="9" cy="7" r="4" />
-          </svg>
-          或从科室通讯拨号
-        </button>
-      )}
-      <button
-        onMouseDown={onStart} onMouseUp={onStop} onMouseLeave={isActive ? onStop : undefined}
-        onTouchStart={(e) => { e.preventDefault(); onStart(); }}
-        onTouchEnd={(e) => { e.preventDefault(); onStop(); }}
-        disabled={isProcessing}
-        className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 select-none touch-manipulation ${
-          isActive ? "bg-red-500 scale-110 shadow-lg shadow-red-500/40" :
-          isProcessing ? "bg-gray-600 scale-90 opacity-60" :
-          "bg-blue-500 hover:bg-blue-400 shadow-lg shadow-blue-500/30"
-        }`}
-      >
-        {isActive && (
-          <>
-            <div className="absolute inset-0 rounded-full animate-ping bg-red-500/30" />
-            <div className="absolute inset-0 rounded-full border-2 border-red-400/50 animate-pulse" />
-          </>
-        )}
-        <MicIcon active={isActive} />
-      </button>
-      <p className="text-xs text-gray-400">{isActive ? "正在聆听...松手停止" : isProcessing ? "识别中..." : "长按说话"}</p>
-      {phase === "reply" && (
-        <button onClick={onContinue} className="text-xs text-blue-400 hover:text-blue-300 underline mt-1">继续对话</button>
-      )}
-    </div>
-  );
-}
-
-// ============================================
-// 呼叫界面
-// ============================================
-function CallScreen({ phase, contact, duration, isMuted, isSpeakerOn, isVideoCall, localVideoRef, remoteVideoRef, onToggleMute, onToggleSpeaker, onToggleVideo, onHangup, onAnswer, isIncoming, callerName, callerDept }: {
-  phase: Phase; contact: StaffContact | null; duration: string; isMuted: boolean; isSpeakerOn: boolean; isVideoCall: boolean;
-  localVideoRef: (el: HTMLVideoElement | null) => void; remoteVideoRef: (el: HTMLVideoElement | null) => void;
-  onToggleMute: () => void; onToggleSpeaker: () => void; onToggleVideo: () => void; onHangup: () => void;
-  onAnswer?: () => void; isIncoming?: boolean;
-  callerName: string; callerDept: string;
-}) {
-  const isRinging = phase === "ringing";
-  const isCalling = phase === "calling";
-  const isInCall = phase === "incall";
-
-  return (
-    <div className="flex-1 flex flex-col bg-gray-950 relative">
-      {isVideoCall && (
-        <>
-          <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
-          <video ref={localVideoRef} autoPlay playsInline muted className="absolute top-4 right-4 w-28 h-40 rounded-xl object-cover border-2 border-white/30 shadow-lg z-10" />
-        </>
-      )}
-      <div className={`flex-1 flex flex-col items-center justify-center ${isVideoCall ? "relative z-10 bg-black/30" : ""}`}>
-        {contact && (
-          <>
-            <div className={`rounded-full flex items-center justify-center font-bold text-white mb-3 transition-all duration-500 ${
-              isInCall ? "w-16 h-16 text-lg bg-blue-500/80" : "w-20 h-20 text-xl bg-blue-500"
-            }`}>
-              {isRinging && <div className="absolute inset-0 rounded-full animate-ping bg-blue-500/20" />}
-              {contact.avatar}
-            </div>
-            <h2 className="text-lg font-semibold text-white mb-1">{contact.name}</h2>
-            <p className="text-sm text-gray-400 mb-1">{contact.hospitalShortName} · {contact.department} · {contact.title}</p>
-            <p className="text-xs text-gray-500 mb-4">
-              呼叫方：{callerName}{callerDept ? `（${callerDept}）` : ""}
-            </p>
-          </>
-        )}
-        {isCalling && <div className="flex items-center gap-2 text-gray-300 text-sm mb-4"><Spinner small /> 正在呼叫...</div>}
-        {isRinging && !isIncoming && <p className="text-gray-300 text-sm mb-4">等待对方接听...</p>}
-        {isRinging && isIncoming && <p className="text-yellow-300 text-sm mb-4">视频来电...</p>}
-        {isInCall && <p className="text-blue-400 text-lg font-mono mb-4">{duration}</p>}
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      className={`w-full bg-white rounded-2xl p-4 flex items-center gap-4 shadow-sm border-l-4 ${c.border} active:scale-[0.98] transition-all ${
+        highlight ? "ring-2 ring-red-200 bg-red-50/30" : ""
+      } ${onClick ? "cursor-pointer" : "cursor-default"}`}
+    >
+      {icon}
+      <div className="text-left flex-1 min-w-0">
+        <div className={`text-base font-semibold ${highlight ? "text-red-600" : "text-gray-800"}`}>{title}</div>
+        <div className={`text-xs mt-0.5 ${highlight ? "text-red-400" : "text-gray-400"}`}>{desc}</div>
       </div>
-      <div className={`pb-6 pt-3 px-8 ${isVideoCall ? "relative z-10 bg-gradient-to-t from-black/80 to-transparent" : ""}`}>
-        {isRinging && isIncoming && onAnswer && (
-          <div className="flex items-center justify-center gap-10 mb-3">
-            <button onClick={onHangup} className="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/40 active:scale-95 transition-transform">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z" transform="rotate(135 12 12)" />
-              </svg>
-            </button>
-            <button onClick={onAnswer} className="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/40 active:scale-95 transition-transform animate-pulse">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.362 1.903.72 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.358 1.85.593 2.81.72A2 2 0 0122 16.92z" />
-              </svg>
-            </button>
-          </div>
-        )}
-        {isInCall && (
-          <div className="flex items-center justify-between max-w-xs mx-auto mb-3">
-            <CallActionBtn icon={<MuteIcon />} label="静音" active={isMuted} onClick={onToggleMute} />
-            <CallActionBtn icon={<SpeakerIcon />} label="免提" active={!isSpeakerOn} onClick={onToggleSpeaker} />
-            <CallActionBtn icon={<VideoIcon />} label={isVideoCall ? "关视频" : "视频"} active={false} onClick={onToggleVideo} />
-          </div>
-        )}
-        {/* 仅非来电响铃时显示单独挂断按钮（来电响铃时已有 拒绝/接听 按钮组） */}
-        {(!isRinging || !isIncoming) && (
-        <div className="flex justify-center">
-          <button onClick={onHangup} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-lg shadow-red-500/40 transition-all active:scale-95">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
-              <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.58.57a1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.46.57 3.58a1 1 0 01-.25 1.01l-2.2 2.2z" transform="rotate(135 12 12)" />
-            </svg>
-          </button>
-        </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CallActionBtn({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; }) {
-  return (
-    <button onClick={onClick} className="flex flex-col items-center gap-1.5">
-      <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${active ? "bg-white text-gray-900" : "bg-white/20 text-white"}`}>{icon}</div>
-      <span className={`text-[11px] ${active ? "text-white" : "text-gray-400"}`}>{label}</span>
+      {onClick && (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c.arrow} strokeWidth="2.2">
+          <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
     </button>
   );
 }
 
-function CallEndedScreen({ contact, duration, onBack }: { contact: StaffContact | null; duration: string; onBack: () => void; }) {
+// ============================================
+// TTS 在线语音合成（Web Speech API 兜底）
+// ============================================
+function EmergencyTTSAudio({
+  text,
+  audioRef,
+}: {
+  text: string;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [supported, setSupported] = useState(true);
+
+  const speak = () => {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      setSupported(false);
+      return;
+    }
+    window.speechSynthesis.cancel(); // 防重复
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "zh-CN";
+    u.rate = 0.9;
+    u.pitch = 1;
+    u.onstart = () => setPlaying(true);
+    u.onend = () => setPlaying(false);
+    u.onerror = () => setPlaying(false);
+    window.speechSynthesis.speak(u);
+  };
+
   return (
-    <div className="flex-1 flex flex-col items-center justify-center px-8 bg-gray-950">
-      {contact && (
+    <div className="space-y-3">
+      {supported ? (
         <>
-          <div className="w-16 h-16 rounded-full bg-blue-500 flex items-center justify-center text-lg font-bold text-white mb-4">{contact.avatar}</div>
-          <h2 className="text-lg font-semibold text-white mb-1">{contact.name}</h2>
-          <p className="text-sm text-gray-400 mb-2">{contact.hospitalShortName} · {contact.department}</p>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+              <path d="M19 10v2a7 7 0 01-14 0v-2" strokeLinecap="round" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+            在线语音合成（未上传本地录音文件）
+          </div>
+          <button
+            onClick={speak}
+            disabled={playing}
+            className={`w-full py-3 rounded-xl font-medium text-sm transition-all active:scale-[0.98] ${
+              playing
+                ? "bg-emerald-100 text-emerald-600"
+                : "bg-gradient-to-r from-emerald-400 to-green-500 text-white shadow-sm"
+            }`}
+          >
+            {playing ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                正在播放...
+              </span>
+            ) : (
+              "🔊 点击播放语音"
+            )}
+          </button>
         </>
+      ) : (
+        <p className="text-sm text-gray-400 text-center py-3">
+          ⚠️ 当前浏览器不支持语音合成，请上传本地 mp3 文件
+        </p>
       )}
-      <p className="text-gray-300 text-sm mb-1">通话已结束</p>
-      <p className="text-gray-500 text-xs mb-6">通话时长 {duration}</p>
-      <button onClick={onBack} className="bg-white/10 hover:bg-white/20 text-white rounded-full px-8 py-3 text-sm font-medium transition-all">返回首页</button>
     </div>
   );
 }
 
-// ============================================
-// 图标
-// ============================================
-function MicIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
-    </svg>
-  );
-}
 
-function Spinner({ small }: { small?: boolean }) {
-  return (
-    <svg className={`animate-spin ${small ? "w-4 h-4" : "w-5 h-5"} text-gray-400`} viewBox="0 0 24 24" fill="none">
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.2" />
-      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function MuteIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 5L6 9H2v6h4l5 4V5z" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" />
-    </svg>
-  );
-}
-
-function SpeakerIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-    </svg>
-  );
-}
-
-function VideoIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="23 7 16 12 23 17 23 7" /><rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-    </svg>
-  );
-}
