@@ -444,7 +444,7 @@ export default function HomePage() {
                     <div className="text-xs text-gray-400">{selectedDoctor?.title}</div>
                   </div>
                 </div>
-                <p className="text-sm text-gray-600">已为您播放预先录制的会诊视频回复</p>
+                <p className="text-sm text-gray-600">正在播放会诊视频回复</p>
               </div>
               <button
                 onClick={goHome}
