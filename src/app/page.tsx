@@ -409,18 +409,18 @@ export default function HomePage() {
               </div>
             </div>
             {/* 视频播放器 — 全宽、大屏（本地优先，在线兜底） */ }
-            <div className="bg-black">
+            <div className="bg-black" style={{ minHeight: "300px" }}>
               {mediaChecked && (
                 <video
                   ref={videoRef}
                   src={videoSrc!}
                   controls
                   autoPlay
+                  muted
                   controlsList="nodownload"
                   playsInline
                   className="w-full"
-                  style={{ maxHeight: "60vh" }}
-                  poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300'%3E%3Crect fill='%231e1b4b' width='400' height='300'/%3E%3Ctext fill='%23c7d2fe' x='50%25' y='45%25' text-anchor='middle' font-size='14'%3E📹 视频消息%3C/text%3E%3Ctext fill='%23818cf8' x='50%25' y='55%25' text-anchor='middle' font-size='12'%3E{selectedDoctor?.name} · 呼吸科%3C/text%3E%3C/svg%3E"
+                  style={{ minHeight: "300px", maxHeight: "60vh", objectFit: "contain" }}
                 >
                   您的浏览器不支持视频播放
                 </video>
