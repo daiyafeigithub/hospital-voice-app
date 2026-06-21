@@ -109,8 +109,24 @@ try {
     Log "npm install OK" -L "OK"
 } catch { Fail "npm install" }
 
-# ---- 5. Build ----
-Write-Host "[5/7] Build project..." -ForegroundColor Yellow
+# ---- 5. Video convert (H.265→H.264, browser compatible) ----
+Write-Host "[5/7] Check video..." -ForegroundColor Yellow
+$videoFile = Join-Path $ProjectDir "public" "respiratory-response.mp4"
+if (Test-Path $videoFile) {
+    try {
+        Log "Video found, converting to H.264..."
+        Set-Location $ProjectDir
+        $o = node convert-video.mjs 2>&1 | Out-String
+        Log "convert output: $($o -replace '\n',' ') "
+        if ($LASTEXITCODE -ne 0) { Log "Video convert failed, may still play" -L "WARN" }
+        else { Log "Video converted OK" -L "OK" }
+    } catch { Log "Video convert error, skip" -L "WARN" }
+} else {
+    Log "No local video, skip" -L "WARN"
+}
+
+# ---- 6. Build ----
+Write-Host "[6/7] Build project..." -ForegroundColor Yellow
 try {
     Set-Location $ProjectDir
     $env:NODE_ENV = "production"
@@ -121,8 +137,8 @@ try {
     Log "Build OK" -L "OK"
 } catch { Fail "Build" }
 
-# ---- 6. Start server ----
-Write-Host "[6/7] Start server..." -ForegroundColor Yellow
+# ---- 7. Start server ----
+Write-Host "[7/7] Start server..." -ForegroundColor Yellow
 try {
     $ns = & { netstat -ano } 2>&1 | Out-String | Select-String ":$Port"
     Log "Port check: $ns"
@@ -144,34 +160,12 @@ try {
     }
 } catch { Fail "Server start" }
 
-# ---- 7. ngrok ----
-Write-Host "[7/7] Start ngrok..." -ForegroundColor Yellow
-$publicUrl = ""
-try {
-    $ng = cmd /c "ngrok version 2>&1"
-    Log "ngrok check: $ng"
-    if ($ng -notmatch 'ngrok version') {
-        Log "Installing ngrok..."
-        & winget install ngrok.ngrok --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
-        $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
-    }
-    $np = Start-Process "ngrok" -ArgumentList "http $Port --log=stdout" -NoNewWindow -PassThru
-    Log "ngrok PID: $($np.Id)"
-    Start-Sleep 5
-    try {
-        $api = Invoke-RestMethod "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5
-        $publicUrl = ($api.tunnels | Where-Object { $_.proto -eq "https" } | Select-Object -First 1).public_url
-        if ($publicUrl) { Log "Public URL: $publicUrl" -L "OK" }
-    } catch { Log "Cannot read ngrok API" -L "WARN" }
-} catch { Log "ngrok failed, skip" -L "WARN" }
-
 # ---- Done ----
 Log "========== DEPLOY COMPLETE =========="
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  DEPLOY SUCCESS!" -ForegroundColor Green
 Write-Host "  Local:  http://localhost:$Port" -ForegroundColor Cyan
-if ($publicUrl) { Write-Host "  Public: $publicUrl" -ForegroundColor Green }
 Write-Host "  Log:    $LogFile" -ForegroundColor Yellow
 Write-Host "  Ctrl+C to stop all services" -ForegroundColor Gray
 Write-Host "============================================" -ForegroundColor Cyan
