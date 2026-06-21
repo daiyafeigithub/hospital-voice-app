@@ -408,7 +408,7 @@ export default function HomePage() {
                 {inputText}
               </div>
             </div>
-            {/* 视频播放器 — 全宽、大屏（本地优先，在线兜底） */ }
+            {/* 视频播放器 — 全宽、大屏（本地优先，在线兜底） */}
             <div className="bg-black" style={{ minHeight: "300px" }}>
               {mediaChecked && (
                 <video
@@ -430,7 +430,7 @@ export default function HomePage() {
                   <div className="animate-spin w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full mr-2" />
                   <span className="text-white/60 text-sm">加载视频中...</span>
                 </div>
-              )}
+            )}
             </div>
             {/* 视频信息条 */}
             <div className="px-5 mt-3">
