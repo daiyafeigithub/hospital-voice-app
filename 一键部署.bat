@@ -137,28 +137,6 @@ try {
     Log "Build OK" -L "OK"
 } catch { Fail "Build" }
 
-# ---- 7. Start server ----
-Write-Host "[7/7] Start server..." -ForegroundColor Yellow
-try {
-    $ns = & { netstat -ano } 2>&1 | Out-String | Select-String ":$Port"
-    Log "Port check: $ns"
-    if ($ns -match ":$Port\s+.*LISTENING\s+(\d+)") {
-        $kp = $Matches[1]
-        Log "Killing process PID=$kp on port $Port"
-        & taskkill /PID $kp /F 2>&1 | Out-Null
-        Start-Sleep 2
-    }
-    Log "Starting next start -p $Port ..."
-    $proc = Start-Process "cmd.exe" -ArgumentList "/c npx next start -p $Port" -NoNewWindow -PassThru -WorkingDirectory $ProjectDir
-    Log "Server PID: $($proc.Id)"
-    Start-Sleep 6
-    try {
-        $r = Invoke-WebRequest "http://localhost:$Port" -UseBasicParsing -TimeoutSec 10
-        Log "Server responded HTTP $($r.StatusCode) OK" -L "OK"
-    } catch {
-        Log "Server response timeout, check manually" -L "WARN"
-    }
-} catch { Fail "Server start" }
 
 # ---- Done ----
 Log "========== DEPLOY COMPLETE =========="

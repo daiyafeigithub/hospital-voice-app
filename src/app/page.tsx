@@ -529,7 +529,7 @@ function MainPage({ onRemoteConsult }: { onRemoteConsult: () => void }) {
 
       {/* 主标题区 */}
       <div className="px-5 pt-6 pb-4 relative">
-        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">虚拟病人问诊系统</h1>
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">协同诊疗系统</h1>
         <p className="text-sm text-gray-400 mt-1">沉浸式病史采集</p>
 
         {/* 盾牌图标 */}
@@ -577,6 +577,40 @@ function MainPage({ onRemoteConsult }: { onRemoteConsult: () => void }) {
           desc="跨院协同 多学科联合会诊"
           onClick={onRemoteConsult}
           highlight
+        />
+
+        {/* 患者资料同步 */}
+        <FeatureCard
+          icon={
+            <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="1.8">
+                <path d="M4 19.5A2.5 2.5 0 016.5 17H20" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="9" y1="7" x2="16" y2="7" strokeLinecap="round"/>
+                <line x1="9" y1="11" x2="16" y2="11" strokeLinecap="round"/>
+                <line x1="9" y1="15" x2="13" y2="15" strokeLinecap="round"/>
+              </svg>
+            </div>
+          }
+          colorClass="blue"
+          title="患者资料同步"
+          desc="实时同步 病历档案一键共享"
+        />
+
+        {/* 检查结果同步 */}
+        <FeatureCard
+          icon={
+            <div className="w-11 h-11 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="1.8">
+                <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" strokeLinecap="round" strokeLinejoin="round"/>
+                <rect x="9" y="3" width="6" height="4" rx="1" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M9 14l2 2 4-4" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+          }
+          colorClass="emerald"
+          title="检查结果同步"
+          desc="影像报告 跨平台即时查看"
         />
 
       </div>
